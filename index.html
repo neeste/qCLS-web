@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>qCLS - Loudness Scaling</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f4f9; display: flex; flex-direction: column; align-items: center; padding: 20px; margin: 0; }
+        
+        #app-container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 880px; display: flex; gap: 20px; min-height: 650px; position: relative; }
+        
+        #sidebar { width: 280px; border-right: 1px solid #ddd; padding-right: 20px; display: flex; flex-direction: column; }
+        .sidebar-top { flex-grow: 1; }
+        .sidebar-bottom { margin-top: auto; }
+        
+        #test-main { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 10px; }
+        
+        .input-group { margin-bottom: 12px; }
+        label { font-size: 0.85em; font-weight: bold; color: #555; display: block; margin-bottom: 4px; }
+        input, select { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        
+        #modal-overlay { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); align-items: center; justify-content: center; }
+        #modal-box { background: white; padding: 30px; border-radius: 8px; width: 450px; box-shadow: 0 5px 25px rgba(0,0,0,0.2); }
+        #modal-box h3 { margin-top: 0; color: #333; }
+        #modal-box ul { padding-left: 20px; color: #444; line-height: 1.5; font-size: 0.95em; }
+        #modal-box li { margin-bottom: 10px; }
+        #modal-close-btn { background: #007bff; color: white; border: none; padding: 10px 25px; border-radius: 5px; cursor: pointer; float: right; font-weight: bold; margin-top: 10px; }
+        
+        #help-btn { background: none; border: none; color: #007bff; text-decoration: underline; cursor: pointer; padding: 0; font-size: 0.85em; margin-top: 10px; }
+        #scale-container { display: flex; flex-direction: column-reverse; align-items: center; gap: 6px; width: 100%; margin-top: 20px; }
+        .category-btn { height: 42px; border: none; border-radius: 4px; color: white; font-weight: bold; cursor: pointer; transition: 0.1s; font-size: 1.05em; }
+        .category-btn:disabled { background: #ccc !important; cursor: wait; }
+        #progress-container { width: 100%; display: none; flex-direction: column; align-items: center; margin-top: 15px; }
+        progress { width: 100%; height: 15px; }
+        
+        button#run-btn { background: #28a745; color: white; border: none; padding: 12px; border-radius: 5px; width: 100%; cursor: pointer; font-weight: bold; }
+        button#cal-btn { background: #007bff; color: white; border: none; padding: 10px; border-radius: 5px; width: 100%; cursor: pointer; margin-bottom: 10px; transition: background 0.2s; font-weight: bold; }
+        button#run-btn:disabled, button#cal-btn:disabled { background-color: #888888 !important; color: #d0d0d0 !important; cursor: not-allowed; }
+        
+        #map-title { display: none; color: #333; margin-top: 0; }
+        #heatmap { border: 1px solid #ddd; border-radius: 8px; width: 500px; height: 500px; display: none; background: white; }
+    </style>
+</head>
+<body>
+
+<div id="modal-overlay">
+    <div id="modal-box">
+        <h3>Instructions</h3>
+        <ul>
+            <li>Listen to the stimulus and select the colored bar that best matches how loud you thought the sound was.</li>
+            <li>Use the bars that have labels and the bars in between that do not have labels.</li>
+            <li>Make each choice based on that sound alone and try not to let the sound you heard before influence your choice.</li>
+            <li>Remember, you are judging the loudness of the sound, not the pitch.</li>
+        </ul>
+        <button id="modal-close-btn" onclick="hideInstructions()">OK</button>
+    </div>
+</div>
+
+<div id="app-container">
+    <div id="sidebar">
+        <div class="sidebar-top">
+            <h3 style="margin-top:0;">qCLS Control</h3>
+            <div class="input-group">
+                <label>Participant ID</label>
+                <input type="text" id="participant-id" value="NH001">
+            </div>
+
+            <div class="input-group">
+                <label>Test Ear</label>
+                <select id="test-ear">
+                    <option value="both">Both</option>
+                    <option value="left">Left</option>
+                    <option value="right">Right</option>
+                </select>
+            </div>
+            
+            <div class="input-group">
+                <label>Stimulus Type</label>
+                <select id="stim-type">
+                    <option value="0">Tone</option>
+                    <option value="1">SAM-Tone</option>
+                    <option value="2">Five-Tone Complex</option>
+                </select>
+            </div>
+            <div class="input-group">
+                <label>Stimulus Bandwidth</label>
+                <select id="stim-bw"></select>
+            </div>
+            <div class="input-group">
+                <label>Center Frequency (Hz)</label>
+                <input type="number" id="center-freq" value="1000">
+            </div>
+            <div class="input-group">
+                <label>Start Level (dB SPL)</label>
+                <input type="number" id="start-level" value="50">
+            </div>
+
+            <div class="input-group">
+                <label>Adaptive Tracking</label>
+                <select id="adaptive-tracking">
+                    <option value="0">Random</option>
+                    <option value="1" selected>Bayesian</option>
+                </select>
+            </div>
+
+            <p id="status" style="font-size: 0.85em; color: #666; margin-top: 20px; font-weight: bold;">Status: Loading C Engine...</p>
+            <button id="help-btn" onclick="showInstructions()">View Instructions</button>
+        </div>
+        
+        <div class="sidebar-bottom">
+            <button id="cal-btn" onclick="toggleCalibrate()" disabled>Calibrate (60dB SPL)</button>
+            <button id="run-btn" onclick="startTest()" disabled>Run Test</button>
+        </div>
+    </div>
+
+    <div id="test-main">
+        <div id="scale-container"></div>
+        <div id="progress-container">
+            <span id="prog-text" style="margin-bottom: 5px; font-size: 0.9em; font-weight: bold; color: #555;">Initial Phase: Trial 1</span>
+            <progress id="test-progress" value="0" max="15"></progress>
+        </div>
+        <h2 id="map-title">Loudness Map</h2>
+        <canvas id="heatmap" width="500" height="500"></canvas>
+        <button id="dl-btn" onclick="downloadCSV()" style="display:none; margin-top:15px; padding:10px 20px; cursor:pointer; background:#333; color:white; border:none; border-radius:5px; font-weight:bold;">Download CSV Data</button>
+    </div>
+</div>
+
+<script>
+    var Module = {
+        onRuntimeInitialized: function() {
+            document.getElementById('cal-btn').disabled = false;
+            document.getElementById('run-btn').disabled = false;
+            document.getElementById('status').innerText = "Status: Ready";
+        }
+    };
+</script>
+<script src="qcls_core.js"></script>
+
+<script>
+    const FS = 48000;
+    const SCALE_FACTOR = 0.01; 
+    let audioCtx;
+    let isCalibrating = false;
+    let calSrc = null;
+
+    let session = {
+        p1Trials: 0, p2Trials: 0, 
+        phase: 'P1', p1Dir: -1, 
+        minL: -10, maxL: 110, curL: 50, curF: 1000, startL: 50, startVal: null,
+        history: []
+    };
+
+    const colors = ["#0000FF","#1a00e6","#3300cc","#4d00b3","#660099","#800080","#990066","#b3004d","#cc0033","#e6001a","#FF0000"];
+    const labels = ["Can't Hear", "Very Soft", "", "Soft", "", "Medium", "", "Loud", "", "Very Loud", "Too Loud"];
+
+    function hideInstructions() { document.getElementById('modal-overlay').style.display = 'none'; }
+    function showInstructions() { document.getElementById('modal-overlay').style.display = 'flex'; }
+
+    const stimTypeSelect = document.getElementById('stim-type');
+    const stimBwSelect = document.getElementById('stim-bw');
+
+    function updateBandwidthOptions() {
+        stimBwSelect.innerHTML = ''; 
+        if (stimTypeSelect.value === "0") { 
+            stimBwSelect.innerHTML = `<option value="zero">Zero</option>`;
+        } else {
+            stimBwSelect.innerHTML = `
+                <option value="oct_0.125">1/8 - octave</option>
+                <option value="oct_0.25">1/4 - octave</option>
+                <option value="oct_0.5">1/2 - octave</option>
+                <option value="oct_1.0">one octave</option>
+                <option value="hz_100">100 Hz</option>
+            `;
+        }
+    }
+
+    stimTypeSelect.addEventListener('change', updateBandwidthOptions);
+    updateBandwidthOptions();
+
+    const container = document.getElementById('scale-container');
+    colors.forEach((color, i) => {
+        const btn = document.createElement('button');
+        btn.className = 'category-btn';
+        btn.style.backgroundColor = color;
+        btn.style.width = `${180 + (i * 25)}px`;
+        btn.innerText = labels[i];
+        btn.disabled = true;
+        btn.onclick = () => handleResponse(i * 5);
+        container.appendChild(btn);
+    });
+
+    async function initAudio() {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)({sampleRate: FS});
+        if (audioCtx.state === 'suspended') await audioCtx.resume();
+    }
+
+    async function toggleCalibrate() {
+        await initAudio();
+        const btn = document.getElementById('cal-btn');
+
+        if (isCalibrating) {
+            if (calSrc) { calSrc.stop(); calSrc.disconnect(); calSrc = null; }
+            btn.innerText = "Calibrate (60dB SPL)";
+            btn.style.backgroundColor = "#007bff";
+            document.getElementById('status').innerText = "Status: Ready";
+            isCalibrating = false;
+        } else {
+            const duration = 1.0; 
+            const buf = audioCtx.createBuffer(1, FS * duration, FS);
+            const data = buf.getChannelData(0);
+            const peak = 1.0 * Math.sqrt(2); 
+
+            for (let i = 0; i < data.length; i++) {
+                data[i] = (peak * Math.sin(2 * Math.PI * 1000 * (i / FS))) * SCALE_FACTOR;
+            }
+
+            calSrc = audioCtx.createBufferSource();
+            calSrc.buffer = buf;
+            calSrc.loop = true; 
+            
+            const panner = audioCtx.createStereoPanner();
+            const ear = document.getElementById('test-ear').value;
+            panner.pan.value = (ear === 'left') ? -1 : (ear === 'right') ? 1 : 0;
+
+            calSrc.connect(panner);
+            panner.connect(audioCtx.destination);
+            calSrc.start();
+            
+            btn.innerText = "Stop Calibration";
+            btn.style.backgroundColor = "#dc3545"; 
+            document.getElementById('status').innerText = "Status: Calibrating...";
+            isCalibrating = true;
+        }
+    }
+
+    async function startTest() {
+        await initAudio();
+        if (isCalibrating) await toggleCalibrate(); 
+        
+        // Reset the session object for a fresh test run
+        session.curF = parseFloat(document.getElementById('center-freq').value) || 1000;
+        session.startL = parseFloat(document.getElementById('start-level').value) || 50;
+        session.curL = session.startL;
+        session.minL = -10;
+        session.maxL = 110;
+        session.phase = 'P1';
+        session.p1Dir = -1; // -1 = Descending First
+        session.p1Trials = 0;
+        session.p2Trials = 0;
+        session.startVal = null;
+        session.history = [];
+        
+        document.getElementById('run-btn').disabled = true;
+        document.getElementById('cal-btn').disabled = true;
+        document.getElementById('test-ear').disabled = true;
+        document.getElementById('stim-type').disabled = true; 
+        document.getElementById('stim-bw').disabled = true;
+        document.getElementById('center-freq').disabled = true;
+        document.getElementById('start-level').disabled = true;
+        document.getElementById('adaptive-tracking').disabled = true;
+        
+        document.getElementById('progress-container').style.display = 'flex';
+        document.getElementById('test-progress').max = 15;
+        document.getElementById('prog-text').innerText = `Initial Phase: Trial 1`;
+        document.getElementById('status').innerText = "Status: Testing...";
+        
+        setTimeout(playStimulus, 1000);
+    }
+
+    function playStimulus() {
+        const duration = 1.0;
+        const numSamples = duration * FS;
+        const buf = audioCtx.createBuffer(1, numSamples, FS);
+        const data = buf.getChannelData(0);
+        
+        const stimType = parseInt(document.getElementById('stim-type').value);
+        const rawBwStr = document.getElementById('stim-bw').value;
+        
+        let finalOctaveBW = 0.0;
+        
+        if (rawBwStr.startsWith('oct_')) {
+            finalOctaveBW = parseFloat(rawBwStr.split('_')[1]);
+        } else if (rawBwStr.startsWith('hz_')) {
+            let hzWidth = parseFloat(rawBwStr.split('_')[1]);
+            let f_upper = session.curF + (hzWidth / 2.0);
+            let f_lower = session.curF - (hzWidth / 2.0);
+            if (f_lower <= 0) f_lower = 1.0; 
+            finalOctaveBW = Math.log2(f_upper / f_lower);
+        }
+
+        const bytesPerFloat = 4;
+        const bufferPointer = Module._malloc(numSamples * bytesPerFloat);
+
+        Module._generate_stimulus(duration, FS, stimType, finalOctaveBW, session.curF, bufferPointer);
+
+        const wasmAudioView = new Float32Array(Module.HEAPF32.buffer, bufferPointer, numSamples);
+
+        const rmsTarget = Math.pow(10, (session.curL - 60) / 20);
+        const amp = rmsTarget * Math.sqrt(2);
+
+        for (let i = 0; i < numSamples; i++) {
+            data[i] = (amp * wasmAudioView[i]) * SCALE_FACTOR; 
+        }
+
+        Module._free(bufferPointer);
+
+        const src = audioCtx.createBufferSource();
+        src.buffer = buf;
+        
+        const panner = audioCtx.createStereoPanner();
+        const ear = document.getElementById('test-ear').value;
+        panner.pan.value = (ear === 'left') ? -1 : (ear === 'right') ? 1 : 0;
+
+        src.connect(panner);
+        panner.connect(audioCtx.destination);
+
+        src.onended = () => document.querySelectorAll('.category-btn').forEach(b => b.disabled = false);
+        src.start();
+    }
+
+    function handleResponse(val) {
+        document.querySelectorAll('.category-btn').forEach(b => b.disabled = true);
+        session.history.push({ f: session.curF, l: session.curL, r: val, p: session.phase });
+        
+        if (session.phase === 'P1') session.p1Trials++;
+        else session.p2Trials++;
+
+        // End Condition
+        if (session.phase === 'P2' && session.p2Trials >= 100) { finishTest(); return; }
+
+        updateAdaptiveLogic(val);
+
+        const progBar = document.getElementById('test-progress');
+        const progText = document.getElementById('prog-text');
+
+        if (session.phase === 'P1') {
+            progBar.removeAttribute('max'); // Indeterminate size for phase 1
+            progBar.value = session.p1Trials;
+            progText.innerText = `Initial Phase: Trial ${session.p1Trials + 1}`;
+        } else {
+            progBar.max = 100;
+            progBar.value = session.p2Trials;
+            progText.innerText = `Trial ${session.p2Trials + 1} of 100`;
+        }
+
+        setTimeout(playStimulus, 500);
+    }
+
+    function updateAdaptiveLogic(val) {
+        if (session.phase === 'P1') {
+            
+            // 1. Save the very first response to determine the ascending step size later
+            if (session.startVal === null) {
+                session.startVal = val;
+            }
+
+            if (session.p1Dir === -1) { 
+                // DESCENDING PORTION
+                if (val === 0 || session.curL <= 0) {
+                    session.minL = session.curL;
+                    session.p1Dir = 1; // Switch to Ascending
+                    
+                    // If the starting value was already "Too Loud", skip ascending entirely
+                    if (session.startVal === 50) {
+                        session.maxL = session.startL;
+                        session.phase = 'P2';
+                        branchPhase2();
+                    } else {
+                        // Jump back to the start level and take the first ascending step
+                        let step = (session.startVal >= 35) ? 5 : 10;
+                        session.curL = session.startL + step;
+                    }
+                } else {
+                    // Keep descending
+                    session.curL -= 10;
+                }
+            } else { 
+                // ASCENDING PORTION
+                if (val === 50 || session.curL >= 110) {
+                    session.maxL = session.curL;
+                    session.phase = 'P2';
+                    branchPhase2();
+                } else {
+                    // Keep ascending
+                    let step = (session.startVal >= 35) ? 5 : 10;
+                    session.curL += step;
+                }
+            }
+
+        } else {
+            // PHASE 2 TRACKING
+            if (val === 50 && session.curL < session.maxL) session.maxL = session.curL;
+            if (val === 0 && session.curL > session.minL) session.minL = session.curL;
+            branchPhase2();
+        }
+        
+        // Final absolute safety bounds
+        if (session.curL > 110) session.curL = 110;
+        if (session.curL < -10) session.curL = -10;
+    }
+
+    function branchPhase2() {
+        const mode = parseInt(document.getElementById('adaptive-tracking').value);
+        if (mode === 0) {
+            setupPhase2TrialRandom();
+        } else {
+            setupPhase2TrialBayesian();
+        }
+    }
+
+    function setupPhase2TrialRandom() {
+        const logMin = Math.log10(250), logMax = Math.log10(6000);
+        session.curF = Math.pow(10, logMin + Math.random() * (logMax - logMin));
+        
+        if (Math.random() > 0.15) {
+            let range = session.maxL - session.minL - 1;
+            if (range < 0) range = 0; 
+            session.curL = session.minL + Math.random() * range;
+        } else {
+            session.curL = session.minL - (Math.random() * 10);
+        }
+    }
+
+    function setupPhase2TrialBayesian() {
+        const numTrials = session.history.length;
+        const bytesPerFloat = 4;
+
+        const ptrF = Module._malloc(numTrials * bytesPerFloat);
+        const ptrL = Module._malloc(numTrials * bytesPerFloat);
+        const ptrR = Module._malloc(numTrials * bytesPerFloat);
+        const ptrOutF = Module._malloc(bytesPerFloat);
+        const ptrOutL = Module._malloc(bytesPerFloat);
+
+        const viewF = new Float32Array(Module.HEAPF32.buffer, ptrF, numTrials);
+        const viewL = new Float32Array(Module.HEAPF32.buffer, ptrL, numTrials);
+        const viewR = new Float32Array(Module.HEAPF32.buffer, ptrR, numTrials);
+
+        for (let i = 0; i < numTrials; i++) {
+            viewF[i] = session.history[i].f;
+            viewL[i] = session.history[i].l;
+            viewR[i] = session.history[i].r;
+        }
+
+        Module._calculate_bap_next(
+            ptrF, ptrL, ptrR, numTrials, session.p1Trials, 
+            session.minL, session.maxL, ptrOutF, ptrOutL
+        );
+
+        session.curF = new Float32Array(Module.HEAPF32.buffer, ptrOutF, 1)[0];
+        session.curL = new Float32Array(Module.HEAPF32.buffer, ptrOutL, 1)[0];
+
+        Module._free(ptrF);
+        Module._free(ptrL);
+        Module._free(ptrR);
+        Module._free(ptrOutF);
+        Module._free(ptrOutL);
+    }
+
+    function finishTest() {
+        document.getElementById('scale-container').style.display = 'none';
+        document.getElementById('progress-container').style.display = 'none';
+        document.getElementById('status').innerText = "Status: Complete";
+        document.getElementById('map-title').style.display = 'block';
+        document.getElementById('heatmap').style.display = 'block';
+        document.getElementById('dl-btn').style.display = 'block';
+        renderHeatmap();
+    }
+
+function renderHeatmap() {
+        const canvas = document.getElementById('heatmap');
+        const ctx = canvas.getContext('2d');
+        const w = canvas.width, h = canvas.height;
+        const padL = 55, padB = 45;
+        const plotW = w - padL, plotH = h - padB;
+        
+        ctx.fillStyle = "white";
+        ctx.fillRect(0, 0, w, h);
+
+        // Allocate memory for the 10 boundaries returned by C
+        const ptrOut = Module._malloc(10 * 4); // 10 floats * 4 bytes
+        const bounds = new Float32Array(Module.HEAPF32.buffer, ptrOut, 10);
+
+        for(let px = 0; px < plotW; px += 5) {
+            // Calculate frequency for this X coordinate
+            let f = 125 * Math.pow(8000/125, px/plotW);
+            
+            // Ask the Bayesian model for the exact dB boundaries at this frequency
+            Module._get_loudness_boundaries(f, ptrOut);
+
+            for(let py = 0; py < plotH; py += 5) {
+                // Calculate dB SPL for this Y coordinate
+                let l = 100 - (py/plotH * 100);
+                
+                // Determine which categorical band this level falls into
+                let categoryIdx = 0;
+                for (let b = 0; b < 10; b++) {
+                    if (l >= bounds[b]) {
+                        categoryIdx = b + 1;
+                    }
+                }
+                
+                // Paint the exact categorical band color
+                ctx.fillStyle = colors[categoryIdx];
+                ctx.fillRect(padL + px, py, 5, 5);
+            }
+        }
+        
+        // Free Wasm memory
+        Module._free(ptrOut);
+        
+        // --- Draw Labels and Axes ---
+        ctx.fillStyle = "#333";
+        ctx.font = "14px 'Segoe UI', sans-serif";
+        ctx.textAlign = "center";
+        ctx.fillText("frequency (kHz)", padL + (plotW / 2), h - 5);
+        ctx.fillText("0.125", padL + 15, h - 25); 
+        ctx.fillText("1", padL + (plotW * 0.5), h - 25); 
+        ctx.fillText("8", padL + plotW - 10, h - 25);
+        
+        ctx.save();
+        ctx.translate(15, plotH / 2);
+        ctx.rotate(-Math.PI / 2);
+        ctx.textAlign = "center";
+        ctx.fillText("stimulus level (dB SPL)", 0, 0);
+        ctx.restore();
+        
+        ctx.textAlign = "right";
+        ctx.textBaseline = "middle";
+        ctx.fillText("100", padL - 8, 10);
+        ctx.fillText("50", padL - 8, plotH / 2);
+        ctx.fillText("0", padL - 8, plotH - 5);
+        
+        ctx.strokeStyle = "#333";
+        ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padL, 0); ctx.lineTo(padL, plotH); ctx.lineTo(w, plotH);
+        ctx.stroke();
+    }
+
+    function downloadCSV() {
+        let csv = "Phase,Trial,Freq,Level,Response\n";
+        let countP1 = 0, countP2 = 0;
+        
+        session.history.forEach((t) => {
+            let trialNum = 0;
+            if (t.p === 'P1') { countP1++; trialNum = countP1; }
+            else { countP2++; trialNum = countP2; }
+            csv += `${t.p},${trialNum},${t.f.toFixed(0)},${t.l.toFixed(1)},${t.r}\n`;
+        });
+        
+        const subjId = document.getElementById('participant-id').value;
+        const earRaw = document.getElementById('test-ear').value;
+        const earFmt = earRaw.charAt(0).toUpperCase();
+
+        const today = new Date();
+        const yyyy = today.getFullYear();
+        const mm = String(today.getMonth() + 1).padStart(2, '0');
+        const dd = String(today.getDate()).padStart(2, '0');
+        const dateStr = `${yyyy}${mm}${dd}`;
+
+        const blob = new Blob([csv], { type: 'text/csv' });
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(blob);
+        a.download = `qCLS_${subjId}_${earFmt}_${dateStr}.csv`;
+        a.click();
+    }
+</script>
+</body>
+</html>
