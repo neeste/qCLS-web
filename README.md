@@ -46,7 +46,14 @@ When JavaScript requests a stimulus, the C engine writes the raw float data into
 Rather than using a naive IDW (Inverse Distance Weighting) blur to draw the final results, the heatmap queries the Bayesian model directly.
 When the test completes, the JavaScript canvas iterates across the frequency spectrum. For every frequency slice, it asks the C engine (`_get_loudness_boundaries`) to evaluate the current state of the phi parameters through the `pchip` interpolator. The resulting visualization paints the exact, mathematically monotonic categorical bands modeled by the Kalman filter.
 
-## 6. How to Use the App
+## 6. Global MCPF Estimation (MLE)
+The application includes a highly advanced Maximum Likelihood Estimator (MLE) built directly into the WebAssembly layer. Upon completion of the test, the algorithm fits the sparse trial data against a 210-parameter generative model of human hearing (MCPF). 
+
+1. **PCA Latent Space:** To prevent overfitting on sparse data, the C engine loads a pre-computed Principal Component Analysis (PCA) model of human hearing (`pca_model.h`). It optimizes only 10 PCA weights, mathematically projecting them back out to a full 210-parameter physiological model.
+2. **Nelder-Mead Optimization:** A custom downhill simplex algorithm searches the 10-dimensional latent space to minimize the Negative Log-Likelihood (NLL) of the patient's exact responses.
+3. **Clinical Metrics:** Once converged, the optimized model effortlessly separates the patient's threshold, loudness slopes, and False-Alarm Rate (FAR). The **Average Slope** and **Average FAR** are instantly extracted from the C memory layer and displayed as actionable clinical metrics.
+
+## 7. How to Use the App
 1. **Load the App:** Open `index.html` in any modern web browser. (The app requires a local server environment, like Python's `http.server`, to allow WebAssembly to load securely).
 2. **Configure:** Enter the Participant ID, Test Ear, Stimulus Type/Bandwidth, and Start Level.
 3. **Calibrate:** Click **Calibrate** to play a continuous 1 kHz tone at a reference level of 60 dB SPL to calibrate your hardware equipment. Click again to stop.

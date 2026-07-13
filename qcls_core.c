@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "pca_model.h"
 
 #define PI 3.14159265358979323846f
 
@@ -384,15 +385,265 @@ void generate_stimulus(float duration, float samplingRate, int stimulusType, flo
     }
 }
 
-/* * get_loudness_boundaries
- * Extracts the 10 monotonic categorical boundaries from the Bayesian model
- * for a requested frequency.
- */
-void get_loudness_boundaries(float freq, float* out_boundaries) {
-    // The default 4 anchor frequencies used by the primary model
-    float current_kfreqs[4] = {1.0f, 3.0f, 6.0f, 9.0f}; 
+// --- MLE MCPF ESTIMATION ---
+static float mle_history_f[1000];
+static float mle_history_l[1000];
+static int mle_history_r[1000];
+static int mle_num_trials = 0;
+float global_estimated_theta[PCA_PARAMS];
+
+void reconstruct_theta(float* w, float* theta_out) {
+    for (int i = 0; i < PCA_PARAMS; i++) {
+        theta_out[i] = pca_mu[i];
+        for (int c = 0; c < PCA_COMPONENTS; c++) {
+            theta_out[i] += pca_V[i * PCA_COMPONENTS + c] * w[c];
+        }
+    }
+    // Clamp FAR parameters (200 to 209)
+    for (int i = 200; i < 210; i++) {
+        if (theta_out[i] < 0.001f) theta_out[i] = 0.001f;
+        if (theta_out[i] > 0.999f) theta_out[i] = 0.999f;
+    }
+}
+
+int freq_hz_to_idx(float f_hz) {
+    float frq_list[10] = {250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 8000};
+    int best_idx = 0;
+    float min_diff = 100000.0f;
+    for (int i=0; i<10; i++) {
+        float diff = fabsf(frq_list[i] - f_hz);
+        if (diff < min_diff) {
+            min_diff = diff;
+            best_idx = i;
+        }
+    }
+    return best_idx;
+}
+
+float compute_mcpf_nll(float* w) {
+    float theta[PCA_PARAMS];
+    reconstruct_theta(w, theta);
     
-    // Evaluate the Bayesian model's boundaries and write to the output pointer
-    calc_alpha(&global_qcls_state, freq, current_kfreqs, global_qcls_state.phi, out_boundaries);
+    float nll = 0.0f;
+    
+    for (int t = 0; t < mle_num_trials; t++) {
+        int f_idx = freq_hz_to_idx(mle_history_f[t]);
+        float spl = mle_history_l[t];
+        int r_idx = (mle_history_r[t] / 5) + 1; // 0->1, 50->11
+        if (r_idx < 1) r_idx = 1;
+        if (r_idx > 11) r_idx = 11;
+        
+        float far = theta[200 + f_idx];
+        float* pa = &theta[f_idx * 20]; 
+        
+        float cb[10] = {0};
+        float md[10] = {0};
+        float sum_md = 0;
+        for (int k = 0; k < 10; k++) {
+            sum_md += pa[10 + k];
+            md[k] = sum_md;
+        }
+        
+        float dfa = far / 11.0f;
+        for (int k = 0; k < 10; k++) {
+            float cf1 = -md[k] * pa[k];
+            float cf2 = pa[k];
+            float pf = 1.0f / (1.0f + expf(-(cf1 + cf2 * spl)));
+            cb[k] = pf * (1.0f - far) + (float)(k + 1) * dfa;
+        }
+        
+        // Eliminate cross-overs
+        for (int it = 0; it < 20; it++) {
+            for (int j = 0; j < 9; j++) {
+                float pd = cb[j+1] - cb[j];
+                if (pd < (dfa / 2.0f)) {
+                    cb[j] = cb[j] + pd/2.0f - dfa/2.0f;
+                    cb[j+1] = cb[j] + dfa;
+                }
+            }
+        }
+        
+        // Top-down
+        float cbmx = 1.0f - dfa;
+        for (int j = 9; j >= 0; j--) {
+            if (cb[j] > cbmx) cb[j] = cbmx;
+            cbmx = cb[j] - dfa;
+        }
+        
+        // Bottom-up
+        float cbmn = dfa;
+        for (int j = 0; j < 10; j++) {
+            if (cb[j] < cbmn) cb[j] = cbmn;
+            cbmn = cb[j] + dfa;
+        }
+        
+        // Convert to category probabilities
+        float pcat[11];
+        pcat[0] = cb[0]; 
+        for (int k=1; k<10; k++) {
+            pcat[k] = cb[k] - cb[k-1];
+        }
+        pcat[10] = 1.0f - cb[9];
+        
+        float sum_pcat = 0;
+        for (int k=0; k<11; k++) {
+            if (pcat[k] < 1e-6f) pcat[k] = 1e-6f;
+            sum_pcat += pcat[k];
+        }
+        
+        float prob_response = pcat[r_idx - 1] / sum_pcat;
+        nll -= logf(prob_response);
+    }
+    return nll;
+}
+
+void run_nelder_mead(float* w_opt) {
+    int N = PCA_COMPONENTS;
+    float simplex[11][10];
+    float f_val[11];
+    
+    // Initialize simplex
+    for(int i=0; i<N+1; i++) {
+        for(int j=0; j<N; j++) {
+            if (i == 0) simplex[i][j] = 0.0f; // origin
+            else {
+                simplex[i][j] = (i - 1 == j) ? 0.5f : 0.0f; // step size 0.5
+            }
+        }
+        f_val[i] = compute_mcpf_nll(simplex[i]);
+    }
+    
+    int max_iters = 1000;
+    float alpha = 1.0f, gamma = 2.0f, rho = 0.5f, sigma = 0.5f;
+    
+    for(int iter = 0; iter < max_iters; iter++) {
+        int best = 0, worst = 0, second_worst = 0;
+        for(int i=1; i<N+1; i++) {
+            if(f_val[i] < f_val[best]) best = i;
+            if(f_val[i] > f_val[worst]) worst = i;
+        }
+        for(int i=0; i<N+1; i++) {
+            if(i != worst && (i == best || f_val[i] > f_val[second_worst])) {
+                second_worst = i;
+            }
+        }
+        
+        float centroid[10] = {0};
+        for(int i=0; i<N+1; i++) {
+            if(i != worst) {
+                for(int j=0; j<N; j++) centroid[j] += simplex[i][j];
+            }
+        }
+        for(int j=0; j<N; j++) centroid[j] /= N;
+        
+        float xr[10];
+        for(int j=0; j<N; j++) xr[j] = centroid[j] + alpha * (centroid[j] - simplex[worst][j]);
+        float fr = compute_mcpf_nll(xr);
+        
+        if (fr >= f_val[best] && fr < f_val[second_worst]) {
+            for(int j=0; j<N; j++) simplex[worst][j] = xr[j];
+            f_val[worst] = fr;
+        } else if (fr < f_val[best]) {
+            float xe[10];
+            for(int j=0; j<N; j++) xe[j] = centroid[j] + gamma * (xr[j] - centroid[j]);
+            float fe = compute_mcpf_nll(xe);
+            if (fe < fr) {
+                for(int j=0; j<N; j++) simplex[worst][j] = xe[j];
+                f_val[worst] = fe;
+            } else {
+                for(int j=0; j<N; j++) simplex[worst][j] = xr[j];
+                f_val[worst] = fr;
+            }
+        } else {
+            float xc[10];
+            for(int j=0; j<N; j++) xc[j] = centroid[j] + rho * (simplex[worst][j] - centroid[j]);
+            float fc = compute_mcpf_nll(xc);
+            if (fc < f_val[worst]) {
+                for(int j=0; j<N; j++) simplex[worst][j] = xc[j];
+                f_val[worst] = fc;
+            } else {
+                for(int i=0; i<N+1; i++) {
+                    if (i != best) {
+                        for(int j=0; j<N; j++) {
+                            simplex[i][j] = simplex[best][j] + sigma * (simplex[i][j] - simplex[best][j]);
+                        }
+                        f_val[i] = compute_mcpf_nll(simplex[i]);
+                    }
+                }
+            }
+        }
+        
+        if (fabsf(f_val[worst] - f_val[best]) < 1e-4f) break;
+    }
+    
+    int best = 0;
+    for(int i=1; i<N+1; i++) {
+        if(f_val[i] < f_val[best]) best = i;
+    }
+    for(int j=0; j<N; j++) w_opt[j] = simplex[best][j];
+}
+
+void estimate_mcpf(float* history_f, float* history_l, float* history_r, int num_trials) {
+    mle_num_trials = num_trials;
+    for (int i=0; i<num_trials; i++) {
+        mle_history_f[i] = history_f[i];
+        mle_history_l[i] = history_l[i];
+        mle_history_r[i] = (int)history_r[i];
+    }
+    
+    float w_opt[10] = {0};
+    run_nelder_mead(w_opt);
+    
+    reconstruct_theta(w_opt, global_estimated_theta);
+}
+
+float get_average_slope() {
+    float sum_slope = 0;
+    for (int i=0; i<10; i++) {
+        for (int k=0; k<10; k++) {
+            sum_slope += global_estimated_theta[i*20 + k];
+        }
+    }
+    return sum_slope / 100.0f;
+}
+
+float get_average_far() {
+    float sum_far = 0;
+    for (int i=200; i<210; i++) {
+        sum_far += global_estimated_theta[i];
+    }
+    return sum_far / 10.0f;
+}
+
+void get_loudness_boundaries(float freq, float* out_boundaries) {
+    float frq_list[10] = {250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 8000};
+    int lower_idx = 0, upper_idx = 0;
+    
+    if (freq <= frq_list[0]) { lower_idx = 0; upper_idx = 0; }
+    else if (freq >= frq_list[9]) { lower_idx = 9; upper_idx = 9; }
+    else {
+        for (int i=0; i<9; i++) {
+            if (freq >= frq_list[i] && freq <= frq_list[i+1]) {
+                lower_idx = i;
+                upper_idx = i+1;
+                break;
+            }
+        }
+    }
+    
+    float t = 0.0f;
+    if (upper_idx != lower_idx) {
+        t = (log10f(freq) - log10f(frq_list[lower_idx])) / (log10f(frq_list[upper_idx]) - log10f(frq_list[lower_idx]));
+    }
+    
+    float* pa_lower = &global_estimated_theta[lower_idx * 20];
+    float* pa_upper = &global_estimated_theta[upper_idx * 20];
+    
+    float sum_lower = 0, sum_upper = 0;
+    for (int k = 0; k < 10; k++) {
+        sum_lower += pa_lower[10 + k];
+        sum_upper += pa_upper[10 + k];
+        out_boundaries[k] = sum_lower + t * (sum_upper - sum_lower);
+    }
 }
 

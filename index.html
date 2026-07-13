@@ -121,6 +121,16 @@
         </div>
         <h2 id="map-title">Loudness Map</h2>
         <canvas id="heatmap" width="500" height="500"></canvas>
+        <div id="metrics-container" style="display:none; justify-content:space-between; width:500px; margin-top:10px;">
+            <div style="background:#eef; padding:10px; border-radius:5px; text-align:center; flex:1; margin-right:10px;">
+                <span style="font-size:0.85em; color:#555; display:block; font-weight:bold;">Average Slope</span>
+                <strong id="val-slope" style="font-size:1.2em; color:#333;">--</strong>
+            </div>
+            <div style="background:#fee; padding:10px; border-radius:5px; text-align:center; flex:1;">
+                <span style="font-size:0.85em; color:#555; display:block; font-weight:bold;">False-Alarm Rate (FAR)</span>
+                <strong id="val-far" style="font-size:1.2em; color:#333;">--</strong>
+            </div>
+        </div>
         <button id="dl-btn" onclick="downloadCSV()" style="display:none; margin-top:15px; padding:10px 20px; cursor:pointer; background:#333; color:white; border:none; border-radius:5px; font-weight:bold;">Download CSV Data</button>
     </div>
 </div>
@@ -459,11 +469,46 @@
     function finishTest() {
         document.getElementById('scale-container').style.display = 'none';
         document.getElementById('progress-container').style.display = 'none';
-        document.getElementById('status').innerText = "Status: Complete";
-        document.getElementById('map-title').style.display = 'block';
-        document.getElementById('heatmap').style.display = 'block';
-        document.getElementById('dl-btn').style.display = 'block';
-        renderHeatmap();
+        
+        document.getElementById('status').innerText = "Status: Estimating MCPF Model (this may take a moment)...";
+        
+        // Give the UI a moment to update the text before locking the thread with C optimization
+        setTimeout(() => {
+            const numTrials = session.history.length;
+            const ptrF = Module._malloc(numTrials * 4);
+            const ptrL = Module._malloc(numTrials * 4);
+            const ptrR = Module._malloc(numTrials * 4);
+            
+            const viewF = new Float32Array(Module.HEAPF32.buffer, ptrF, numTrials);
+            const viewL = new Float32Array(Module.HEAPF32.buffer, ptrL, numTrials);
+            const viewR = new Float32Array(Module.HEAPF32.buffer, ptrR, numTrials);
+            
+            for (let i = 0; i < numTrials; i++) {
+                viewF[i] = session.history[i].f;
+                viewL[i] = session.history[i].l;
+                viewR[i] = session.history[i].r;
+            }
+            
+            Module._estimate_mcpf(ptrF, ptrL, ptrR, numTrials);
+            
+            Module._free(ptrF);
+            Module._free(ptrL);
+            Module._free(ptrR);
+            
+            let avgSlope = Module._get_average_slope();
+            let avgFar = Module._get_average_far();
+            
+            document.getElementById('status').innerText = "Status: Complete";
+            document.getElementById('map-title').style.display = 'block';
+            document.getElementById('heatmap').style.display = 'block';
+            document.getElementById('dl-btn').style.display = 'block';
+            
+            document.getElementById('metrics-container').style.display = 'flex';
+            document.getElementById('val-slope').innerText = avgSlope.toFixed(3) + " CU/dB";
+            document.getElementById('val-far').innerText = (avgFar * 100).toFixed(1) + "%";
+            
+            renderHeatmap();
+        }, 100);
     }
 
 function renderHeatmap() {
