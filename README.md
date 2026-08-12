@@ -137,7 +137,7 @@ Optional. Left blank, the procedure behaves exactly as it did before.
   against thresholds in dB SPL, so dB HL must have the RETSPL added.
 - **Transducer**: selects which RETSPL table performs that conversion. On the
   same audiogram the CU 5 prior at 250 Hz lands at 67.9 dB SPL under the legacy
-  table and 55.4 under ER-3A inserts, **12.4 dB apart**, at the frequency where
+  table and 58.2 under ER-3A inserts, **9.7 dB apart**, at the frequency where
   the prior is most sensitive to threshold. Choosing wrongly biases the
   low-frequency prior silently.
 
