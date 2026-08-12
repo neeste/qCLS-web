@@ -126,9 +126,13 @@
                 <span style="font-size:0.85em; color:#555; display:block; font-weight:bold;">Average Slope</span>
                 <strong id="val-slope" style="font-size:1.2em; color:#333;">--</strong>
             </div>
-            <div style="background:#fee; padding:10px; border-radius:5px; text-align:center; flex:1;">
+            <div style="background:#fee; padding:10px; border-radius:5px; text-align:center; flex:1; margin-right:10px;">
                 <span style="font-size:0.85em; color:#555; display:block; font-weight:bold;">False-Alarm Rate (FAR)</span>
                 <strong id="val-far" style="font-size:1.2em; color:#333;">--</strong>
+            </div>
+            <div style="background:#efe; padding:10px; border-radius:5px; text-align:center; flex:1;">
+                <span style="font-size:0.85em; color:#555; display:block; font-weight:bold;">Posterior SD (median)</span>
+                <strong id="val-sd" style="font-size:1.2em; color:#333;">--</strong>
             </div>
         </div>
         <button id="dl-btn" onclick="downloadCSV()" style="display:none; margin-top:15px; padding:10px 20px; cursor:pointer; background:#333; color:white; border:none; border-radius:5px; font-weight:bold;">Download CSV Data</button>
@@ -157,7 +161,8 @@
         p1Trials: 0, p2Trials: 0, 
         phase: 'P1', p1Dir: -1, 
         minL: -10, maxL: 110, curL: 50, curF: 1000, startL: 50, startVal: null,
-        history: []
+        history: [],
+        report: null
     };
 
     const colors = ["#0000FF","#1a00e6","#3300cc","#4d00b3","#660099","#800080","#990066","#b3004d","#cc0033","#e6001a","#FF0000"];
@@ -490,11 +495,33 @@
             }
             
             Module._estimate_mcpf(ptrF, ptrL, ptrR, numTrials);
-            
+
+            // Bring the Bayesian tracker up to date on the same history and
+            // read its mixture estimate. calculate_bap_next reseeds from the
+            // prior and replays every trial, so afterwards the posterior
+            // holds the whole run; the stimulus it proposes is discarded.
+            const ptrNF = Module._malloc(4);
+            const ptrNL = Module._malloc(4);
+            const ptrMu = Module._malloc(90 * 4);
+            const ptrSd = Module._malloc(90 * 4);
+
+            Module._calculate_bap_next(ptrF, ptrL, ptrR, numTrials, 0, 0, 110, ptrNF, ptrNL);
+            Module._qcls_report(ptrMu, ptrSd, 0);
+
+            // 9 bands x 10 boundaries, frequency-major: index = band*10 + b
+            session.report = {
+                mu: Array.from(new Float32Array(Module.HEAPF32.buffer, ptrMu, 90)),
+                sd: Array.from(new Float32Array(Module.HEAPF32.buffer, ptrSd, 90))
+            };
+
+            Module._free(ptrNF);
+            Module._free(ptrNL);
+            Module._free(ptrMu);
+            Module._free(ptrSd);
             Module._free(ptrF);
             Module._free(ptrL);
             Module._free(ptrR);
-            
+
             let avgSlope = Module._get_average_slope();
             let avgFar = Module._get_average_far();
             
@@ -506,7 +533,12 @@
             document.getElementById('metrics-container').style.display = 'flex';
             document.getElementById('val-slope').innerText = avgSlope.toFixed(3) + " CU/dB";
             document.getElementById('val-far').innerText = (avgFar * 100).toFixed(1) + "%";
-            
+
+            // The tracker reports uncertainty; the MCPF point estimate cannot.
+            const sds = session.report.sd.slice().sort((a, b) => a - b);
+            document.getElementById('val-sd').innerText =
+                sds[Math.floor(sds.length / 2)].toFixed(1) + " dB";
+
             renderHeatmap();
         }, 100);
     }
@@ -552,7 +584,9 @@ function renderHeatmap() {
         
         // Free Wasm memory
         Module._free(ptrOut);
-        
+
+        drawTrackerOverlay(ctx, padL, plotW, plotH);
+
         // --- Draw Labels and Axes ---
         ctx.fillStyle = "#333";
         ctx.font = "14px 'Segoe UI', sans-serif";
@@ -580,6 +614,78 @@ function renderHeatmap() {
         ctx.beginPath();
         ctx.moveTo(padL, 0); ctx.lineTo(padL, plotH); ctx.lineTo(w, plotH);
         ctx.stroke();
+    }
+
+    // Overlay the Bayesian tracker's mixture estimate on the heatmap: three
+    // boundary contours, each with a +/- 1 SD band. The heatmap itself comes
+    // from the MCPF point estimate, which carries no uncertainty, so these
+    // curves show both what the tracker independently concluded and how well
+    // the run actually pinned it down. Where the band is wide, the run did
+    // not constrain that boundary and the color underneath is overconfident.
+    function drawTrackerOverlay(ctx, padL, plotW, plotH) {
+        if (!session.report) return;
+
+        const bandHz = [250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000];
+        const xOf = (f) => padL + plotW * Math.log(f / 125) / Math.log(8000 / 125);
+        const yOf = (l) => plotH * (100 - l) / 100;
+
+        // CU 5, 25 and 50: the bottom, middle and top of the loudness function
+        const contours = [
+            { b: 0, label: "CU 5",  color: "#0033cc" },
+            { b: 4, label: "CU 25", color: "#006600" },
+            { b: 9, label: "CU 50", color: "#cc0000" }
+        ];
+
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(padL, 0, plotW, plotH);
+        ctx.clip();
+
+        contours.forEach((c) => {
+            const mu = bandHz.map((f, i) => session.report.mu[i * 10 + c.b]);
+            const sd = bandHz.map((f, i) => session.report.sd[i * 10 + c.b]);
+
+            ctx.fillStyle = c.color + "33";
+            ctx.beginPath();
+            bandHz.forEach((f, i) => {
+                const x = xOf(f), y = yOf(mu[i] + sd[i]);
+                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            });
+            for (let i = bandHz.length - 1; i >= 0; i--) {
+                ctx.lineTo(xOf(bandHz[i]), yOf(mu[i] - sd[i]));
+            }
+            ctx.closePath();
+            ctx.fill();
+
+            // White halo under each line, so the contour stays readable
+            // against whatever saturated color the heatmap paints beneath it.
+            const trace = () => {
+                ctx.beginPath();
+                bandHz.forEach((f, i) => {
+                    const x = xOf(f), y = yOf(mu[i]);
+                    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+                });
+            };
+            ctx.strokeStyle = "rgba(255,255,255,0.9)";
+            ctx.lineWidth = 5;
+            trace(); ctx.stroke();
+            ctx.strokeStyle = c.color;
+            ctx.lineWidth = 2;
+            trace(); ctx.stroke();
+
+            // Label at the low-frequency end, where there is room inside the
+            // plot; labeling the 6 kHz end runs the text into the clip edge.
+            ctx.font = "bold 11px 'Segoe UI', sans-serif";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "bottom";
+            ctx.lineWidth = 3;
+            ctx.strokeStyle = "rgba(255,255,255,0.9)";
+            ctx.strokeText(c.label, xOf(bandHz[0]) + 4, yOf(mu[0]) - 3);
+            ctx.fillStyle = c.color;
+            ctx.fillText(c.label, xOf(bandHz[0]) + 4, yOf(mu[0]) - 3);
+        });
+
+        ctx.restore();
     }
 
     function downloadCSV() {
