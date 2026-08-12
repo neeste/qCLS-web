@@ -118,6 +118,11 @@
                 </span>
             </div>
 
+            <div class="input-group">
+                <label>Previous Sessions</label>
+                <select id="session-list" onchange="loadSession()"></select>
+            </div>
+
             <p id="status" style="font-size: 0.85em; color: #666; margin-top: 20px; font-weight: bold;">Status: Loading C Engine...</p>
             <button id="help-btn" onclick="showInstructions()">View Instructions</button>
         </div>
@@ -161,6 +166,7 @@
     var Module = {
         onRuntimeInitialized: function() {
             buildAudiogramInputs();
+            refreshSessionList();
             document.getElementById('cal-btn').disabled = false;
             document.getElementById('run-btn').disabled = false;
             document.getElementById('status').innerText = "Status: Ready";
@@ -270,6 +276,10 @@
     // The nine BAP bands. 8 kHz is not one of them, so it is not collected.
     const AUDIO_BANDS = [250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000];
 
+    // Reference equivalent threshold SPL, for converting dB HL to dB SPL.
+    // Same values as RETSPL in qcls_core.c.
+    const RETSPL = [30, 19, 12, 10, 9, 15, 15.5, 13, 13];
+
     function buildAudiogramInputs() {
         document.getElementById('audiogram-grid').innerHTML = AUDIO_BANDS.map((f) =>
             `<div style="text-align:center;">
@@ -292,6 +302,11 @@
             return raw === '' ? NaN : parseFloat(raw);
         });
         const measured = vals.filter((v) => isFinite(v)).length;
+        const isHL = document.getElementById('audio-units').value === 'hl';
+
+        // Keep a copy in dB SPL so the contour plot, whose level axis is SPL,
+        // can show the audiogram against the CU5 contour.
+        session.audiogramSPL = vals.map((v, i) => isFinite(v) ? (isHL ? v + RETSPL[i] : v) : NaN);
 
         // No thresholds at all means the stock prior, not a prior built from
         // nine fallbacks, so an empty form behaves exactly as before.
@@ -491,9 +506,14 @@
     }
 
     function setupPhase2TrialRandom() {
-        const logMin = Math.log10(250), logMax = Math.log10(6000);
-        session.curF = Math.pow(10, logMin + Math.random() * (logMax - logMin));
-        
+        // Draw from the same nine band centers the Bayesian arm presents.
+        // This used to be a continuous log-uniform draw between 250 Hz and
+        // 6 kHz, which put stimuli at frequencies the model has no band for
+        // and meant the two adaptive-tracking arms differed in what they
+        // presented as well as in how they chose it. They now differ only in
+        // the choice, so Random is a control for Bayesian.
+        session.curF = AUDIO_BANDS[Math.floor(Math.random() * AUDIO_BANDS.length)];
+
         if (Math.random() > 0.15) {
             let range = session.maxL - session.minL - 1;
             if (range < 0) range = 0; 
@@ -621,6 +641,7 @@
                 sds[Math.floor(sds.length / 2)].toFixed(1) + " dB";
 
             renderContours();
+            saveSession();
         }, 100);
     }
 
@@ -691,6 +712,37 @@
                 ctx.beginPath(); ctx.arc(xOf(f), yOf(mu[i]), 2.5, 0, Math.PI * 2); ctx.fill();
             });
         }
+        // The audiogram, converted to dB SPL to share the level axis. Drawn
+        // against CU5 because they are meant to be the same construct: the
+        // lowest level the listener reports hearing. The gap between them is
+        // the quantity behind the question of whether loudness scaling could
+        // stand in for an audiogram.
+        if (session.audiogramSPL && session.audiogramSPL.some(isFinite)) {
+            ctx.save();
+            ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
+            ctx.strokeStyle = "#111"; ctx.lineWidth = 1.5; ctx.setLineDash([5, 3]);
+            ctx.beginPath();
+            let started = false;
+            AUDIO_BANDS.forEach((f, i) => {
+                const v = session.audiogramSPL[i];
+                if (!isFinite(v)) return;
+                const x = xOf(f), y = yOf(v);
+                started ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+                started = true;
+            });
+            ctx.stroke();
+            ctx.setLineDash([]);
+            AUDIO_BANDS.forEach((f, i) => {
+                const v = session.audiogramSPL[i];
+                if (!isFinite(v)) return;
+                ctx.beginPath();
+                ctx.arc(xOf(f), yOf(v), 4, 0, Math.PI * 2);
+                ctx.fillStyle = "white"; ctx.fill();
+                ctx.strokeStyle = "#111"; ctx.lineWidth = 1.5; ctx.stroke();
+            });
+            ctx.restore();
+        }
+
         ctx.restore();
 
         ctx.font = "11px 'Segoe UI', sans-serif";
@@ -724,6 +776,79 @@
         ctx.fillText("stimulus level (dB SPL)", 0, 0);
         ctx.restore();
     }
+    // Completed sessions previously lived only in a page variable and were
+    // lost on reload, so a test that was not downloaded straight away was
+    // gone. They are kept in localStorage instead. This is per browser and
+    // per machine, not a record system: the CSV downloads remain the way
+    // results leave the app.
+    const STORE_KEY = 'qcls_sessions';
+    const STORE_MAX = 50;
+
+    function loadStore() {
+        try { return JSON.parse(localStorage.getItem(STORE_KEY)) || []; }
+        catch (e) { return []; }
+    }
+
+    function saveSession() {
+        if (!session.report) return;
+        const rec = {
+            when: new Date().toISOString(),
+            id: document.getElementById('participant-id').value,
+            ear: document.getElementById('test-ear').value,
+            mode: document.getElementById('adaptive-tracking').value === '1' ? 'Bayesian' : 'Random',
+            history: session.history,
+            report: session.report,
+            audiogramSPL: session.audiogramSPL || null,
+            metrics: {
+                growth: document.getElementById('val-slope').innerText,
+                far: document.getElementById('val-far').innerText,
+                sd: document.getElementById('val-sd').innerText
+            }
+        };
+        const all = loadStore();
+        all.unshift(rec);
+        // Storage is finite. Drop the oldest rather than lose the newest.
+        for (let keep = Math.min(all.length, STORE_MAX); keep >= 1; keep--) {
+            try { localStorage.setItem(STORE_KEY, JSON.stringify(all.slice(0, keep))); break; }
+            catch (e) { if (keep === 1) return; }
+        }
+        refreshSessionList();
+    }
+
+    function refreshSessionList() {
+        const sel = document.getElementById('session-list');
+        if (!sel) return;
+        const all = loadStore();
+        sel.innerHTML = `<option value="">${all.length} saved</option>` +
+            all.map((r, i) =>
+                `<option value="${i}">${r.id} ${r.ear.charAt(0).toUpperCase()} ` +
+                `${r.when.slice(0, 16).replace('T', ' ')}</option>`).join('');
+    }
+
+    function loadSession() {
+        const raw = document.getElementById('session-list').value;
+        if (raw === '') return;
+        const r = loadStore()[parseInt(raw)];
+        if (!r || !r.report) return;
+
+        session.history = r.history;
+        session.report = r.report;
+        session.audiogramSPL = r.audiogramSPL;
+        document.getElementById('participant-id').value = r.id;
+        document.getElementById('test-ear').value = r.ear;
+
+        document.getElementById('map-title').style.display = 'block';
+        document.getElementById('heatmap').style.display = 'block';
+        document.getElementById('dl-btn').style.display = 'flex';
+        document.getElementById('metrics-container').style.display = 'flex';
+        document.getElementById('val-slope').innerText = r.metrics.growth;
+        document.getElementById('val-far').innerText = r.metrics.far;
+        document.getElementById('val-sd').innerText = r.metrics.sd;
+        document.getElementById('status').innerText =
+            "Status: Loaded " + r.when.slice(0, 16).replace('T', ' ') + " (" + r.mode + ")";
+        renderContours();
+    }
+
     // Equal-loudness contours: the result of the test rather than its raw
     // input. One row per band and category boundary, carrying the mixture
     // mean and its standard deviation. Without this the estimate exists only
