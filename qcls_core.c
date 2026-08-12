@@ -9,6 +9,42 @@
 #define N_CATEGORIES 11
 #define N_FREQS 9
 #define K_FREQS 4
+#define PHI_LEN (K_FREQS * 3)
+// Anchor subsets: the two endpoints are fixed at frequency 1 and N_FREQS and
+// the middle K_FREQS-2 are chosen from 2..N_FREQS-1, so C(7,2) = 21 models.
+// Mirrors nchoosek(2:Nfreqs-1, kfreqs-2) in qCLS.m.
+#define N_MODELS 21
+
+// Prior for phi conditioned on the audiogram, generated from
+// qCLS_core/cls_prior_hyper.mat. Rows are the 9 BAP frequency bands, columns
+// the three boundaries calc_alpha anchors on (indices 1, 5 and 10).
+// CUK is {intercept, slope, residual_sd} regressed on threshold in dB SPL.
+static const float CUK[9][3][3] = {
+  { {9.541069f,0.777958f,9.954793f}, {82.747685f,0.152409f,8.663963f}, {113.014599f,0.022964f,10.365659f} },
+  { {7.175458f,0.832067f,9.907452f}, {77.696519f,0.219623f,9.269154f}, {110.872889f,0.035455f,10.986171f} },
+  { {8.062010f,0.830853f,9.963816f}, {78.301655f,0.200816f,10.672021f}, {108.747053f,0.059845f,12.102284f} },
+  { {12.292245f,0.793625f,10.238809f}, {77.214433f,0.221603f,9.790290f}, {108.213324f,0.041339f,11.448002f} },
+  { {11.761756f,0.858843f,10.220027f}, {77.688104f,0.246026f,11.642567f}, {106.333359f,0.081863f,11.000892f} },
+  { {6.863046f,0.796562f,10.058991f}, {73.841899f,0.247670f,9.456480f}, {103.948009f,0.097027f,11.129556f} },
+  { {6.677511f,0.786996f,10.432455f}, {72.930442f,0.275449f,10.853000f}, {102.422606f,0.146522f,11.883761f} },
+  { {9.535355f,0.832504f,9.874957f}, {74.715981f,0.286727f,10.149155f}, {103.563136f,0.149755f,11.280537f} },
+  { {15.266472f,0.853497f,11.330088f}, {78.947260f,0.274759f,10.030553f}, {111.246051f,0.042939f,11.072435f} },
+};
+// CUK0 is {mean, sd} over the cohort, used where a threshold is missing: the
+// same population with the audiogram integrated out rather than guessed.
+static const float CUK0[9][3][2] = {
+  { {43.944701f,15.272769f}, {89.487677f,8.956191f}, {114.030154f,10.371296f} },
+  { {36.484583f,17.987326f}, {85.432625f,10.080657f}, {112.121787f,11.004780f} },
+  { {29.008255f,18.090650f}, {83.364343f,11.278790f}, {110.255790f,12.151055f} },
+  { {35.666137f,19.516764f}, {83.741102f,10.833961f}, {109.430848f,11.480671f} },
+  { {30.860785f,18.301520f}, {83.159245f,12.428355f}, {108.153834f,11.095665f} },
+  { {36.142093f,20.555059f}, {82.945452f,10.976743f}, {107.514392f,11.341715f} },
+  { {32.429770f,19.958819f}, {81.943746f,12.379568f}, {107.217130f,12.298748f} },
+  { {43.811535f,23.613264f}, {86.521230f,12.553086f}, {109.728893f,11.922152f} },
+  { {45.121980f,21.822886f}, {88.558375f,11.690277f}, {112.748055f,11.112123f} },
+};
+// Reference equivalent threshold SPL, used to convert dB HL to dB SPL.
+static const float RETSPL[10] = {30.0f,19.0f,12.0f,10.0f,9.0f,15.0f,15.5f,13.0f,13.0f,14.0f};
 
 typedef enum { STIM_TONE = 0, STIM_SAM_TONE, STIM_FIVE_TONE } StimulusType;
 
@@ -19,8 +55,10 @@ typedef struct {
     int kfreqs;
     float beta;
     float lambda;
-    float phi_prior_mu[N_FREQS][3]; 
-    float phi_prior_std[3];
+    float phi_prior_mu[N_FREQS][3];
+    // Per frequency, so a band whose prior is better informed can be given a
+    // tighter one. Uniform rows reproduce the previous single [3] behavior.
+    float phi_prior_std[N_FREQS][3];
     float x_lim[2][2]; 
     float Lclearance;
     float fclearance;
@@ -33,15 +71,31 @@ typedef struct {
     float x_current[2];  
     float x_next[2];     
     int trial_n;
-    float phi[N_FREQS * 3]; 
-    float P[(N_FREQS * 3) * (N_FREQS * 3)]; 
+    // A discrete posterior over anchor-frequency subsets with a Gaussian over
+    // phi inside each, rather than one fixed subset. Reading the most likely
+    // model alone discards the disagreement between them; by the law of total
+    // variance the posterior variance is
+    //   V = sum_m w_m*Var_m + sum_m w_m*(mu_m - mu)^2
+    // and only the first term is available from a single model.
+    float phi[N_MODELS][PHI_LEN];
+    float P[N_MODELS][PHI_LEN * PHI_LEN];
+    float mkfreqs[N_MODELS][K_FREQS];
+    float Lmodels[N_MODELS];
 } qCLS_State;
 
 // Global instance of the test state
 qCLS_State global_qcls_state;
 
+// Set once the configuration is populated. calculate_bap_next reseeds the
+// posterior on every call but must not overwrite a prior the caller has
+// already conditioned on an audiogram.
+static int qcls_par_ready = 0;
+
 // --- FORWARD DECLARATIONS ---
-void Kalman_update(qCLS_State* qcls, float* phi, float* P, float* kfreqs, int phi_len, float freq, float lev, int* r_bool);
+void qcls_seed_models(void);
+void qcls_audiogram_prior(float* thr, int units_are_hl);
+void qcls_report(float* out_mu, float* out_sd, float* out_muMAP);
+float Kalman_update(qCLS_State* qcls, float* phi, float* P, float* kfreqs, int phi_len, float freq, float lev, int* r_bool);
 void CLS_psycfun(qCLS_State* qcls, float freq, float lev, float* kfreqs, float* phi, float* p_out);
 void CLS_jacobian(qCLS_State* qcls, float freq, float lev, float* kfreqs, float* phi, int phi_len, float* H_out);
 void calc_alpha(qCLS_State* qcls, float freq, float* kfreqs, float* phi, float* alpha_out);
@@ -62,10 +116,12 @@ void init_bayesian_state() {
         global_qcls_state.par.phi_prior_mu[i][2] = 110.0f;
     }
     
-    global_qcls_state.par.phi_prior_std[0] = 10.0f;
-    global_qcls_state.par.phi_prior_std[1] = 10.0f;
-    global_qcls_state.par.phi_prior_std[2] = 10.0f;
-    
+    for (int i = 0; i < N_FREQS; i++) {
+        global_qcls_state.par.phi_prior_std[i][0] = 10.0f;
+        global_qcls_state.par.phi_prior_std[i][1] = 10.0f;
+        global_qcls_state.par.phi_prior_std[i][2] = 10.0f;
+    }
+
     global_qcls_state.par.x_lim[0][0] = 1.0f;
     global_qcls_state.par.x_lim[0][1] = 0.0f;
     global_qcls_state.par.x_lim[1][0] = (float)N_FREQS;
@@ -75,6 +131,48 @@ void init_bayesian_state() {
     global_qcls_state.par.fclearance = 0.1f;
     global_qcls_state.par.likelihood_exp = 0.95f;
     global_qcls_state.par.diffusion = 0.01f;
+
+    qcls_par_ready = 1;
+    qcls_seed_models();
+}
+
+// Enumerate the anchor subsets and seed each model from the current prior.
+// Separate from init_bayesian_state so that conditioning the prior on an
+// audiogram can reseed without disturbing the rest of the configuration.
+//
+// This also supplies the starting phi and P. Previously neither was ever
+// written: the state is a file-scope global, so phi and P began as all zeros,
+// and because the diffusion step is multiplicative (P += diffusion*P) a zero
+// covariance stayed zero. The Kalman gain was therefore identically zero and
+// phi never moved off zero for the whole run.
+void qcls_seed_models(void) {
+    int m = 0;
+    for (int i = 2; i <= N_FREQS - 1; i++) {
+        for (int j = i + 1; j <= N_FREQS - 1; j++) {
+            global_qcls_state.mkfreqs[m][0] = 1.0f;
+            global_qcls_state.mkfreqs[m][1] = (float)i;
+            global_qcls_state.mkfreqs[m][2] = (float)j;
+            global_qcls_state.mkfreqs[m][3] = (float)N_FREQS;
+            m++;
+        }
+    }
+
+    for (m = 0; m < N_MODELS; m++) {
+        global_qcls_state.Lmodels[m] = 0.0f;
+        for (int a = 0; a < K_FREQS; a++) {
+            int f = (int)global_qcls_state.mkfreqs[m][a] - 1;   // 0-based band
+            for (int j = 0; j < 3; j++) {
+                int k = a * 3 + j;
+                global_qcls_state.phi[m][k] = global_qcls_state.par.phi_prior_mu[f][j];
+                for (int c = 0; c < PHI_LEN; c++) {
+                    global_qcls_state.P[m][k * PHI_LEN + c] = 0.0f;
+                }
+                float sd = global_qcls_state.par.phi_prior_std[f][j];
+                global_qcls_state.P[m][k * PHI_LEN + k] = sd * sd;
+            }
+        }
+    }
+    global_qcls_state.trial_n = 0;
 }
 
 // --- MATRIX MATH HELPERS ---
@@ -234,8 +332,10 @@ void CLS_jacobian(qCLS_State* qcls, float freq, float lev, float* kfreqs, float*
     }
 }
 
-void Kalman_update(qCLS_State* qcls, float* phi, float* P, float* kfreqs, int phi_len, float freq, float lev, int* r_bool) {
-    int n_bounds = qcls->par.Ncategories - 1; 
+// Returns sum(log l), the log-likelihood of the observed response pattern
+// under this model, which the caller accumulates into Lmodels.
+float Kalman_update(qCLS_State* qcls, float* phi, float* P, float* kfreqs, int phi_len, float freq, float lev, int* r_bool) {
+    int n_bounds = qcls->par.Ncategories - 1;
     for (int i = 0; i < phi_len; i++) {
         int diag_idx = i * phi_len + i;
         P[diag_idx] += qcls->par.diffusion * P[diag_idx];
@@ -263,8 +363,8 @@ void Kalman_update(qCLS_State* qcls, float* phi, float* P, float* kfreqs, int ph
     mat_add(Denom_full, var, n_bounds, n_bounds, Denom_full); 
     
     float Denom_inv[100];
-    if (!mat_invert(Denom_full, n_bounds, Denom_inv)) return; // Singular failsafe
-    
+    if (!mat_invert(Denom_full, n_bounds, Denom_inv)) return 0.0f; // Singular failsafe
+
     float K[120]; 
     mat_mult(Numerator, phi_len, n_bounds, Denom_inv, n_bounds, n_bounds, K);
 
@@ -281,6 +381,155 @@ void Kalman_update(qCLS_State* qcls, float* phi, float* P, float* kfreqs, int ph
     float K_H1_P[144];
     mat_mult(K_H1, phi_len, phi_len, P, phi_len, phi_len, K_H1_P);
     for (int i = 0; i < phi_len * phi_len; i++) P[i] -= K_H1_P[i];
+
+    // Likelihood of the observed pattern: mu where the listener responded
+    // above the boundary, 1-mu where below. Evaluated at the pre-update mu,
+    // matching qCLS.m.
+    float loglik = 0.0f;
+    for (int i = 0; i < n_bounds; i++) {
+        float l = r_bool[i] ? mu[i] : (1.0f - mu[i]);
+        if (l < 1e-6f) l = 1e-6f;
+        loglik += logf(l);
+    }
+    return loglik;
+}
+
+// Prior for phi conditioned on the audiogram.
+//
+// thr is 10 thresholds at 250 500 750 1000 1500 2000 3000 4000 6000 8000 Hz,
+// NaN where not measured. units_are_hl selects dB HL, otherwise dB SPL.
+//
+// UNITS ARE NOT OPTIONAL. CUK was fitted against thresholds in dB SPL. Passing
+// dB HL unconverted shifts the prior by the RETSPL, 30 dB at 250 Hz, which is
+// larger than the residual scatter the prior is built on. It would not fail
+// loudly, it would quietly bias the low frequencies.
+//
+// The stock prior is [40 90 110] +/- 10 dB at every frequency, the same for a
+// listener with normal hearing and one with a 70 dB loss. On 148 CLS2023
+// listeners replaying recorded responses, conditioning on the audiogram is
+// worth 0.396 dB, SE 0.116, t = 3.4, better in 89 of 148.
+void qcls_audiogram_prior(float* thr, int units_are_hl) {
+    if (!qcls_par_ready) init_bayesian_state();
+
+    for (int f = 0; f < N_FREQS; f++) {
+        float t = thr ? thr[f] : NAN;
+        if (units_are_hl && !isnan(t)) t += RETSPL[f];
+
+        for (int j = 0; j < 3; j++) {
+            float mu, sd;
+            if (!isnan(t)) {
+                mu = CUK[f][j][0] + CUK[f][j][1] * t;
+                sd = CUK[f][j][2];
+            } else {
+                // Fall back per frequency to that boundary's cohort
+                // distribution: the audiogram integrated out, not guessed.
+                mu = CUK0[f][j][0];
+                sd = CUK0[f][j][1];
+            }
+            if (mu < -5.0f) mu = -5.0f;
+            if (mu > 120.0f) mu = 120.0f;
+            global_qcls_state.par.phi_prior_mu[f][j]  = mu;
+            global_qcls_state.par.phi_prior_std[f][j] = sd;
+        }
+        // Keep the three anchors ordered and separated.
+        float* pm = global_qcls_state.par.phi_prior_mu[f];
+        if (pm[1] < pm[0] + 5.0f) pm[1] = pm[0] + 5.0f;
+        if (pm[2] < pm[1] + 5.0f) pm[2] = pm[1] + 5.0f;
+    }
+
+    qcls_seed_models();
+}
+
+// Map a stimulus frequency in Hz to a continuous BAP band index in [1,N_FREQS].
+// calc_alpha works in band index, but the JavaScript layer passes frequencies
+// in Hz, so the two have to be reconciled before any Kalman update. The band
+// centers are the first N_FREQS audiometric frequencies, the same set CUK,
+// get_loudness_boundaries and the MATLAB catalog use. calc_alpha interpolates
+// continuously, so a fractional index is meaningful and no rounding is needed.
+static float bap_freq_index(float f_hz) {
+    static const float fc[N_FREQS] = {250,500,750,1000,1500,2000,3000,4000,6000};
+    if (f_hz <= fc[0]) return 1.0f;
+    if (f_hz >= fc[N_FREQS-1]) return (float)N_FREQS;
+    for (int i = 0; i < N_FREQS - 1; i++) {
+        if (f_hz <= fc[i+1]) {
+            float t = (log10f(f_hz) - log10f(fc[i])) /
+                      (log10f(fc[i+1]) - log10f(fc[i]));
+            return (float)(i + 1) + t;
+        }
+    }
+    return (float)N_FREQS;
+}
+
+// alpha for every band under a given phi, laid out freq-major to match
+// reshape(.., Ncategories-1, Nfreqs) in qCLS.m.
+static void model_alpha_all(qCLS_State* q, int m, float* phi, float* out) {
+    for (int f = 0; f < N_FREQS; f++) {
+        float a[10];
+        calc_alpha(q, (float)(f + 1), q->mkfreqs[m], phi, a);
+        for (int b = 0; b < 10; b++) out[f * 10 + b] = a[b];
+    }
+}
+
+// The boundaries this procedure reports and their standard deviation,
+// averaged over the candidate models rather than taken from the single most
+// likely one. out_mu, out_sd and out_muMAP are each N_FREQS*10 floats;
+// out_sd and out_muMAP may be null.
+//
+// On 148 listeners the between-model standard deviation is 2.18 dB and the
+// mixture mean is 0.22 to 0.25 dB more accurate than the mode, t = 7.2 with
+// the shipped prior and 9.1 with an audiogram prior.
+void qcls_report(float* out_mu, float* out_sd, float* out_muMAP) {
+    static float A[N_MODELS][N_FREQS * 10];
+    static float Vm[N_MODELS][N_FREQS * 10];
+    static float J[N_FREQS * 10][PHI_LEN];
+    float w[N_MODELS];
+    qCLS_State* q = &global_qcls_state;
+    const int NB = N_FREQS * 10;
+    const float h = 1e-3f;
+
+    float Lmax = q->Lmodels[0];
+    for (int m = 1; m < N_MODELS; m++) if (q->Lmodels[m] > Lmax) Lmax = q->Lmodels[m];
+    float wsum = 0.0f;
+    for (int m = 0; m < N_MODELS; m++) { w[m] = expf(q->Lmodels[m] - Lmax); wsum += w[m]; }
+    for (int m = 0; m < N_MODELS; m++) w[m] /= wsum;
+
+    for (int m = 0; m < N_MODELS; m++) {
+        model_alpha_all(q, m, q->phi[m], A[m]);
+        for (int j = 0; j < PHI_LEN; j++) {
+            float p2[PHI_LEN], a2[N_FREQS * 10];
+            for (int k = 0; k < PHI_LEN; k++) p2[k] = q->phi[m][k];
+            p2[j] += h;
+            model_alpha_all(q, m, p2, a2);
+            for (int i = 0; i < NB; i++) J[i][j] = (a2[i] - A[m][i]) / h;
+        }
+        for (int i = 0; i < NB; i++) {
+            float s = 0.0f;
+            for (int a = 0; a < PHI_LEN; a++) {
+                float jp = 0.0f;
+                for (int b = 0; b < PHI_LEN; b++) jp += J[i][b] * q->P[m][b * PHI_LEN + a];
+                s += jp * J[i][a];
+            }
+            Vm[m][i] = s;
+        }
+    }
+
+    int best = 0;
+    for (int m = 1; m < N_MODELS; m++) if (q->Lmodels[m] > q->Lmodels[best]) best = m;
+
+    for (int i = 0; i < NB; i++) {
+        float mu = 0.0f;
+        for (int m = 0; m < N_MODELS; m++) mu += w[m] * A[m][i];
+        out_mu[i] = mu;
+        if (out_sd) {
+            float V = 0.0f;
+            for (int m = 0; m < N_MODELS; m++) {
+                float d = A[m][i] - mu;
+                V += w[m] * Vm[m][i] + w[m] * d * d;   // within + between
+            }
+            out_sd[i] = sqrtf(V > 0.0f ? V : 0.0f);
+        }
+        if (out_muMAP) out_muMAP[i] = A[best][i];
+    }
 }
 
 // --- JAVASCRIPT BRIDGES ---
@@ -289,26 +538,36 @@ void calculate_bap_next(
     int num_trials, int p1_trials, float min_L, float max_L, 
     float* out_f, float* out_l
 ) {
-    init_bayesian_state();
-    float current_kfreqs[4] = {1.0f, 3.0f, 6.0f, 9.0f}; 
+    // Reseed the posterior for this replay, but keep whatever prior the
+    // caller has set. Calling init_bayesian_state() here would silently
+    // discard an audiogram-conditioned prior on every trial.
+    if (!qcls_par_ready) init_bayesian_state();
+    qcls_seed_models();
+
     int r_bool[10];
 
     for (int i = 0; i < num_trials; i++) {
         for (int b = 0; b < 10; b++) {
-            float boundary_val = (float)(b + 1) * 5.0f; 
+            float boundary_val = (float)(b + 1) * 5.0f;
             r_bool[b] = (history_r[i] >= boundary_val) ? 1 : 0;
         }
+        float fidx = bap_freq_index(history_f[i]);
 
-        Kalman_update(
-            &global_qcls_state, 
-            global_qcls_state.phi, 
-            global_qcls_state.P, 
-            current_kfreqs, 
-            12, 
-            history_f[i], 
-            history_l[i], 
-            r_bool
-        );
+        for (int m = 0; m < N_MODELS; m++) {
+            float ll = Kalman_update(
+                &global_qcls_state,
+                global_qcls_state.phi[m],
+                global_qcls_state.P[m],
+                global_qcls_state.mkfreqs[m],
+                PHI_LEN,
+                fidx,
+                history_l[i],
+                r_bool
+            );
+            global_qcls_state.Lmodels[m] =
+                global_qcls_state.par.likelihood_exp * global_qcls_state.Lmodels[m] + ll;
+        }
+        global_qcls_state.trial_n++;
     }
 
     int freq_candidate_idx = (rand() % N_FREQS) + 1;
