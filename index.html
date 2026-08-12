@@ -631,7 +631,7 @@
         document.getElementById('scale-container').style.display = 'none';
         document.getElementById('progress-container').style.display = 'none';
         
-        document.getElementById('status').innerText = "Status: Estimating MCPF Model (this may take a moment)...";
+        document.getElementById('status').innerText = "Status: Estimating loudness contours...";
         
         // Give the UI a moment to update the text before locking the thread with C optimization
         setTimeout(() => {
@@ -650,8 +650,6 @@
                 viewR[i] = session.history[i].r;
             }
             
-            Module._estimate_mcpf(ptrF, ptrL, ptrR, numTrials);
-
             // Bring the Bayesian tracker up to date on the same history and
             // read its mixture estimate. calculate_bap_next reseeds from the
             // prior and replays every trial, so afterwards the posterior
@@ -680,7 +678,6 @@
             Module._free(ptrL);
             Module._free(ptrR);
 
-            let avgSlope = Module._get_average_slope();
             
             document.getElementById('status').innerText = "Status: Complete";
             document.getElementById('map-title').style.display = 'block';
