@@ -899,6 +899,16 @@ float get_average_slope() {
     return expf(sum_log_slope / 100.0f);
 }
 
+// Mean of the fitted false-alarm rates.
+//
+// This cannot serve as a per-listener measure and should not be displayed as
+// one. The rate is read off the PCA projection rather than the data, and all
+// ten of its parameters carry the identical loading of 0.00131, so a
+// two-sigma excursion on every component moves the result only from 0.086 to
+// 0.096. Listeners in the CLS2023 catalog span 0.005 to 0.270 with a
+// between-listener SD of 0.037, and the parameter was fit as a single value
+// per listener, invariant across frequency, which is why the ten slots move
+// together. The interface measures the rate from the trials instead.
 float get_average_far() {
     float sum_far = 0;
     for (int i=200; i<210; i++) {

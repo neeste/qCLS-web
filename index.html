@@ -610,7 +610,6 @@
             Module._free(ptrR);
 
             let avgSlope = Module._get_average_slope();
-            let avgFar = Module._get_average_far();
             
             document.getElementById('status').innerText = "Status: Complete";
             document.getElementById('map-title').style.display = 'block';
@@ -633,7 +632,14 @@
             document.getElementById('val-slope').innerText = growth.length
                 ? (growth.reduce((a, b) => a + b, 0) / growth.length).toFixed(2) + " CU/dB"
                 : "--";
-            document.getElementById('val-far').innerText = (avgFar * 100).toFixed(1) + "%";
+            // Measured from the trials, with the number it rests on. Shown as
+            // "--" when too few sub-threshold presentations occurred to support
+            // a rate, rather than printing a number that looks like a finding.
+            const far = estimateFAR();
+            document.getElementById('val-far').innerText =
+                (far && far.n >= FAR_MIN_TRIALS)
+                    ? (100 * far.rate).toFixed(1) + "% (n=" + far.n + ")"
+                    : "-- (n=" + (far ? far.n : 0) + ")";
 
             // The tracker reports uncertainty; the MCPF point estimate cannot.
             const sds = session.report.sd.slice().sort((a, b) => a - b);
@@ -776,6 +782,65 @@
         ctx.fillText("stimulus level (dB SPL)", 0, 0);
         ctx.restore();
     }
+    // CU5 at an arbitrary frequency, interpolated along the contour in log
+    // frequency the same way the tracker interpolates between bands.
+    function cu5At(fHz) {
+        const B = AUDIO_BANDS, mu = session.report.mu;
+        if (fHz <= B[0]) return mu[0];
+        if (fHz >= B[B.length - 1]) return mu[(B.length - 1) * 10];
+        for (let i = 0; i < B.length - 1; i++) {
+            if (fHz <= B[i + 1]) {
+                const t = (Math.log(fHz) - Math.log(B[i])) /
+                          (Math.log(B[i + 1]) - Math.log(B[i]));
+                return mu[i * 10] + t * (mu[(i + 1) * 10] - mu[i * 10]);
+            }
+        }
+        return mu[(B.length - 1) * 10];
+    }
+
+    // False-alarm rate measured from the trials: the proportion of clearly
+    // sub-threshold presentations that still drew a response above "can't
+    // hear". A listener who is guessing or inattentive produces them; an
+    // attentive one does not.
+    //
+    // This replaces get_average_far, which read the rate off the PCA
+    // projection rather than the data. All ten of its parameters carry the
+    // same loading of 0.00131, so a two-sigma excursion on every component
+    // moves it only from 0.086 to 0.096, while real listeners in the CLS2023
+    // catalog span 0.005 to 0.270 with a between-listener SD of 0.037. The
+    // displayed number was a constant with rounding attached.
+    //
+    // Read it as a screening indicator, not a calibrated rate. It separates
+    // a clean listener from a guessing one, and on simulated listeners it
+    // recovers a true 0.02 as 0.021. At higher rates it is biased, and the
+    // direction of the bias varies with the run: 0.25 came back as 0.28 in
+    // one simulation and 0.20 as 0.147 in another. Part of the reason is
+    // circular, in that false alarms drag the CU5 estimate down and CU5 is
+    // what defines "sub-threshold" here.
+    //
+    // The count is reported alongside the rate because it is not always large
+    // enough to support one. Posterior-driven selection concentrates trials
+    // near boundaries and leaves few sub-threshold: the random arm yields
+    // about 40 qualifying trials, the Bayesian arm 4 to 10.
+    //
+    // Deliberate catch trials, presented well below threshold, would fix both
+    // problems at once. They would guarantee the count regardless of the
+    // selection rule and give a reference that does not move with the
+    // responses being measured.
+    const FAR_MARGIN_DB = 5;
+    const FAR_MIN_TRIALS = 8;
+
+    function estimateFAR() {
+        if (!session.report || !session.history || !session.history.length) return null;
+        let n = 0, fa = 0;
+        session.history.forEach((t) => {
+            const cu5 = cu5At(t.f);
+            if (!isFinite(cu5)) return;
+            if (t.l < cu5 - FAR_MARGIN_DB) { n++; if (t.r > 0) fa++; }
+        });
+        return { rate: n ? fa / n : null, n: n };
+    }
+
     // Completed sessions previously lived only in a page variable and were
     // lost on reload, so a test that was not downloaded straight away was
     // gone. They are kept in localStorage instead. This is per browser and
