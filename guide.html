@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>qCLS Operator Guide</title>
+<style>
+  body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f4f9;
+         margin: 0; padding: 24px; color: #333; line-height: 1.55; }
+  main { background: #fff; max-width: 780px; margin: 0 auto; padding: 32px 40px;
+         border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); }
+  h1 { margin-top: 0; font-size: 1.6em; }
+  h2 { margin-top: 1.7em; font-size: 1.15em; border-bottom: 1px solid #e2e2e2; padding-bottom: 5px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 0.93em; }
+  th, td { border: 1px solid #ddd; padding: 6px 9px; text-align: left; vertical-align: top; }
+  th { background: #f0f0f5; }
+  code { background: #f3f3f7; padding: 1px 5px; border-radius: 3px; font-size: 0.92em; }
+  .warn { background: #fff6f6; border-left: 4px solid #cc3333; padding: 10px 14px; margin: 12px 0; }
+  .note { background: #f5f8ff; border-left: 4px solid #4a6fbf; padding: 10px 14px; margin: 12px 0; }
+  ol, ul { padding-left: 22px; }
+  a.back { display: inline-block; margin-bottom: 16px; color: #007bff; }
+</style>
+</head>
+<body>
+<main>
+<a class="back" href="index.html">&larr; back to the test</a>
+<h1>qCLS Operator Guide</h1>
+<p>Categorical loudness scaling in the browser. Everything runs locally; no
+participant data leaves the machine.</p>
+
+<h2>1. Before each session</h2>
+<ol>
+  <li><strong>Calibrate.</strong> Click <em>Calibrate</em> for a continuous 1 kHz
+      tone at 60 dB SPL and set the hardware to match. Click again to stop.
+      Every level, every contour and the audiogram prior inherit this step.</li>
+  <li><strong>Set Max Output.</strong> The loudest level that will ever be
+      presented. Default 100 dB SPL. Lower it for a listener with reduced
+      tolerance.</li>
+  <li><strong>Enter the participant details</strong> and stimulus settings.</li>
+  <li><strong>Optionally enter the audiogram</strong> (see below).</li>
+</ol>
+
+<h2>2. Safety</h2>
+<p>Nothing is presented above <strong>Max Output</strong>. Whatever is typed is
+clamped to the 110 dB SPL equipment limit, and the field locks once a run
+starts.</p>
+<p>The working ceiling also drops <strong>5 dB automatically every time the
+listener responds "Too Loud"</strong>, in both phases, and never rises again
+during a run. A final check sits immediately before the level becomes sound.</p>
+<div class="note">Stimulus selection targets the boundary it is least certain
+about, and the top category sits near the top of the range, so an unbounded run
+would drift toward loud levels rather than away from them. The ceiling and the
+backoff are what prevent that.</div>
+
+<h2>3. The audiogram (optional)</h2>
+<p>Left blank, the procedure behaves exactly as it would without this feature.
+Filled in, it starts the listener from a prior matched to their hearing rather
+than from a population average, worth about 0.4 dB on average.</p>
+<ul>
+  <li>Nine fields, 250 Hz to 6 kHz. <strong>Leave any frequency blank if it was
+      not measured</strong>; blanks fall back to the population distribution for
+      that band rather than to a guess.</li>
+  <li><strong>Units</strong> must match how the audiogram was recorded, dB HL or
+      dB SPL.</li>
+  <li><strong>Transducer</strong> selects the conversion used for dB HL.</li>
+</ul>
+<div class="warn"><strong>Units and transducer both matter, and neither fails
+visibly.</strong> On the same audiogram the prior at 250 Hz differs by about
+12 dB between the default table and insert earphones. If you are unsure which
+table applies to your setup, leave the transducer on
+<em>unspecified (legacy)</em>, or leave the audiogram blank entirely, rather
+than guessing.<br><br>
+The non-default transducer values are nominal published figures and have not
+been verified against local calibration. Check them before relying on one.</div>
+
+<h2>4. Running the test</h2>
+<p>Click <em>Run Test</em>. The listener sees the response scale and the
+instructions available from <em>View Instructions</em>.</p>
+<table>
+  <tr><th>Phase 1</th><td>Brackets the listener's range. Descends in 10 dB steps
+      until "Can't Hear", then ascends from the start level until "Too Loud" or
+      the ceiling.</td></tr>
+  <tr><th>Phase 2</th><td>About 100 trials. Each one is chosen where the current
+      estimate is least certain, so the listener will sometimes hear very similar
+      sounds in succession. This is expected, and the instructions tell them it
+      is fine to repeat an answer.</td></tr>
+</table>
+
+<h2>5. Reading the result</h2>
+<p>The plot shows <strong>equal-loudness contours</strong>: one curve per
+category boundary, giving the level that elicits CU 5, 10, … 50 against
+frequency.</p>
+<ul>
+  <li>The <strong>shaded band</strong> around each curve is &plusmn;1 standard
+      deviation. A wide band means that boundary was not pinned down; treat it
+      with caution rather than reading the curve alone.</li>
+  <li>If an audiogram was entered it is drawn as a <strong>dashed line</strong>,
+      converted to dB SPL. It should sit near the lowest contour.</li>
+</ul>
+<table>
+  <tr><th>Loudness Growth</th><td>CU per dB between the CU 5 and CU 50 contours,
+      averaged over bands. Higher means a narrower dynamic range.</td></tr>
+  <tr><th>False-Alarm Rate</th><td>Responses above "Can't Hear" to sounds well
+      below the listener's threshold, with the number of such trials in
+      brackets. A screening indicator of attention, not a precise rate. Shown as
+      <code>--</code> when too few trials qualify.</td></tr>
+  <tr><th>Posterior SD</th><td>Median uncertainty across all boundaries. The
+      single best summary of how much to trust the run.</td></tr>
+</table>
+
+<h2>6. Saving the results</h2>
+<p>Two downloads appear when the test completes.</p>
+<table>
+  <tr><th>Download trials (TBT)</th><td>The raw record: phase, trial, frequency,
+      level, response.</td></tr>
+  <tr><th>Download contours (ELC)</th><td>The result: band, frequency, CU, level
+      and SD, 90 rows.</td></tr>
+</table>
+<p>Completed sessions also appear under <em>Previous Sessions</em> and can be
+reloaded.</p>
+<div class="warn"><strong>Session storage is not a record system.</strong> It
+lives in this browser on this machine, holds the 50 most recent sessions, and is
+lost if the browser data is cleared. Download the CSV files for anything you
+need to keep.</div>
+</main>
+</body>
+</html>
