@@ -45,39 +45,40 @@ static const float CUK0[9][3][2] = {
 };
 // Reference equivalent threshold SPL, used to convert dB HL to dB SPL.
 //
-// RETSPL depends on the transducer, and the difference is not small: insert
-// earphones sit roughly 10 dB below supra-aural at 250 Hz, which is where the
-// regression of the CU5 boundary on threshold has its steepest slope, 0.778.
-// Passing dB HL measured on inserts through a supra-aural table therefore
-// shifts the low-frequency prior by more than the residual scatter it is
-// built on. It would not fail loudly.
+// RETSPL depends on the transducer and the difference is not small, so the
+// wrong table biases the low-frequency prior silently.
 //
-// Index with a RetsplSet value. RETSPL_LEGACY reproduces the single table
-// that was hardcoded here, and is the default, so nothing changes unless a
-// transducer is chosen deliberately.
+// Only tables measured at BTNRH are offered. An earlier version of this file
+// also carried nominal published figures for TDH-39, TDH-49/50 and HDA200.
+// Those were removed: the ER-3A row taken from the same source was low by 3.5
+// to 15.5 dB against BTNRH's own measured values, which is the error the
+// selector exists to prevent, and the other three were guesses of the same
+// kind for transducers not used here.
 //
-// VERIFY BEFORE CLINICAL USE. The non-legacy rows are the nominal published
-// values for those transducers and are provided so the mechanism is usable,
-// not as a substitute for the calibration in force where the test runs. Check
-// them against ANSI S3.6 and against your own coupler measurements, and
-// correct them here and in qCLS_audiogram_prior.m together: the two must
-// agree or the MATLAB and WebAssembly paths will disagree about the prior.
+//   RETSPL_LEGACY  the table qCLS_audiogram_prior has always used. Its
+//                  provenance is unrecorded. It is not ER-3A; it may be the
+//                  Sennheiser HD 280 Pro circumaural headphone also used at
+//                  BTNRH, but that is unconfirmed.
+//   RETSPL_ER3A    Etymotic ER-3A insert phone, from the table in
+//                  clspf_demo.m and plot_cb.m.
+//
+// To add a transducer, measure its RETSPL on your own coupler and add a row
+// here, in qCLS_audiogram_prior.m of BoysTownOrg/qCLS, and in RETSPL_SETS in
+// index.html. The three must agree. Do not copy figures from a standard
+// without checking them against the hardware in use.
+//
+// The Sennheiser HD 280 Pro is a monitoring headphone, not an audiometric
+// transducer, and has no standardised RETSPL. It has to be measured locally.
 typedef enum {
-    RETSPL_LEGACY = 0,   // the table previously hardcoded, provenance unrecorded
-    RETSPL_TDH39,        // supra-aural, NBS 9A coupler
-    RETSPL_TDH49,        // supra-aural, NBS 9A coupler
-    RETSPL_ER3A,         // insert, HA-2 with rigid tube
-    RETSPL_HDA200,       // circumaural
+    RETSPL_LEGACY = 0,   // the table qCLS_audiogram_prior has always used
+    RETSPL_ER3A,         // Etymotic ER-3A insert, BTNRH's own measured values
     RETSPL_NSETS
 } RetsplSet;
 
 // Columns: 250 500 750 1000 1500 2000 3000 4000 6000 8000 Hz.
 static const float RETSPL_TABLE[RETSPL_NSETS][10] = {
     {30.0f, 19.0f, 12.0f, 10.0f,  9.0f, 15.0f, 15.5f, 13.0f, 13.0f, 14.0f},
-    {25.5f, 11.5f,  8.0f,  7.0f,  6.5f,  9.0f, 10.0f,  9.5f, 15.5f, 13.0f},
-    {26.5f, 13.5f,  8.5f,  7.5f,  7.5f, 11.0f,  9.5f, 10.5f, 13.5f, 13.0f},
-    {14.0f,  5.5f,  2.0f,  0.0f,  2.0f,  3.0f,  3.5f,  5.5f,  2.0f,  0.0f},
-    {30.5f, 18.0f, 17.0f, 16.5f, 16.0f, 16.0f, 14.0f, 16.0f, 21.0f, 15.5f}
+    {17.5f,  9.5f,  6.0f,  5.5f,  9.5f, 11.5f, 13.0f, 15.0f, 16.0f, 15.5f}
 };
 
 // Which set qcls_audiogram_prior uses. Set through qcls_set_transducer.

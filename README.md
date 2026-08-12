@@ -141,9 +141,10 @@ Optional. Left blank, the procedure behaves exactly as it did before.
   the prior is most sensitive to threshold. Choosing wrongly biases the
   low-frequency prior silently.
 
-> The non-legacy RETSPL values are nominal published figures and are marked
-> VERIFY BEFORE CLINICAL USE in the source. Check them against ANSI S3.6 and
-> your own coupler measurements before selecting one.
+> Only tables measured at BTNRH are offered. Nominal published figures for
+> TDH-39, TDH-49/50 and HDA200 were removed after the ER-3A row taken from the
+> same source proved 3.5 to 15.5 dB low against BTNRH's own measurements. To
+> add a transducer, measure it rather than copying a standard.
 
 Conditioning on the audiogram is worth 0.396 dB, SE 0.116, t = 3.4, on 148
 listeners replaying recorded responses.
