@@ -877,14 +877,26 @@ void estimate_mcpf(float* history_f, float* history_l, float* history_r, int num
     reconstruct_theta(w_opt, global_estimated_theta);
 }
 
+// Geometric mean of the 100 psychometric slopes, in 1/dB.
+//
+// theta stores these as LOG slopes: they enter the psychometric function as
+// 1/(1+exp(-slp*(lev-md))), so the stored value has to be exponentiated
+// before it means anything. This returned the mean of the logs, which is
+// negative, and the interface displayed it as "CU/dB" -- a negative loudness
+// slope, which would be a psychometric function that falls with level. The
+// mean is taken in log space and exponentiated because that is the space the
+// parameter is modeled and priored in.
+//
+// Note this is the steepness of a category boundary, not the rate at which
+// loudness grows. It is not in CU/dB and should not be labeled as such.
 float get_average_slope() {
-    float sum_slope = 0;
+    float sum_log_slope = 0;
     for (int i=0; i<10; i++) {
         for (int k=0; k<10; k++) {
-            sum_slope += global_estimated_theta[i*20 + k];
+            sum_log_slope += global_estimated_theta[i*20 + k];
         }
     }
-    return sum_slope / 100.0f;
+    return expf(sum_log_slope / 100.0f);
 }
 
 float get_average_far() {

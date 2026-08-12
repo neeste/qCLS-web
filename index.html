@@ -138,7 +138,7 @@
         <canvas id="heatmap" width="500" height="500"></canvas>
         <div id="metrics-container" style="display:none; justify-content:space-between; width:500px; margin-top:10px;">
             <div style="background:#eef; padding:10px; border-radius:5px; text-align:center; flex:1; margin-right:10px;">
-                <span style="font-size:0.85em; color:#555; display:block; font-weight:bold;">Average Slope</span>
+                <span style="font-size:0.85em; color:#555; display:block; font-weight:bold;">Loudness Growth</span>
                 <strong id="val-slope" style="font-size:1.2em; color:#333;">--</strong>
             </div>
             <div style="background:#fee; padding:10px; border-radius:5px; text-align:center; flex:1; margin-right:10px;">
@@ -598,7 +598,21 @@
             document.getElementById('dl-btn').style.display = 'flex';
             
             document.getElementById('metrics-container').style.display = 'flex';
-            document.getElementById('val-slope').innerText = avgSlope.toFixed(3) + " CU/dB";
+            // Loudness growth is the rate the scale is actually reported in:
+            // 45 CU between the CU5 and CU50 contours, divided by the level
+            // range they span, averaged over the bands. get_average_slope
+            // returns something different, the steepness of a single category
+            // boundary in 1/dB, which is an internal parameter rather than a
+            // clinical readout and was previously shown here mislabeled as
+            // CU/dB and, before the log slope was exponentiated, negative.
+            const growth = [];
+            for (let i = 0; i < AUDIO_BANDS.length; i++) {
+                const range = session.report.mu[i * 10 + 9] - session.report.mu[i * 10 + 0];
+                if (range > 1) growth.push(45 / range);
+            }
+            document.getElementById('val-slope').innerText = growth.length
+                ? (growth.reduce((a, b) => a + b, 0) / growth.length).toFixed(2) + " CU/dB"
+                : "--";
             document.getElementById('val-far').innerText = (avgFar * 100).toFixed(1) + "%";
 
             // The tracker reports uncertainty; the MCPF point estimate cannot.
