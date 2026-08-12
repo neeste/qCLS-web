@@ -134,7 +134,7 @@
             <span id="prog-text" style="margin-bottom: 5px; font-size: 0.9em; font-weight: bold; color: #555;">Initial Phase: Trial 1</span>
             <progress id="test-progress" value="0" max="15"></progress>
         </div>
-        <h2 id="map-title">Loudness Map</h2>
+        <h2 id="map-title">Equal-Loudness Contours</h2>
         <canvas id="heatmap" width="500" height="500"></canvas>
         <div id="metrics-container" style="display:none; justify-content:space-between; width:500px; margin-top:10px;">
             <div style="background:#eef; padding:10px; border-radius:5px; text-align:center; flex:1; margin-right:10px;">
@@ -150,7 +150,10 @@
                 <strong id="val-sd" style="font-size:1.2em; color:#333;">--</strong>
             </div>
         </div>
-        <button id="dl-btn" onclick="downloadCSV()" style="display:none; margin-top:15px; padding:10px 20px; cursor:pointer; background:#333; color:white; border:none; border-radius:5px; font-weight:bold;">Download CSV Data</button>
+        <div id="dl-btn" style="display:none; margin-top:15px; gap:10px;">
+            <button onclick="downloadTBT()" style="padding:10px 20px; cursor:pointer; background:#333; color:white; border:none; border-radius:5px; font-weight:bold;">Download trials (TBT)</button>
+            <button onclick="downloadELC()" style="padding:10px 20px; cursor:pointer; background:#333; color:white; border:none; border-radius:5px; font-weight:bold;">Download contours (ELC)</button>
+        </div>
     </div>
 </div>
 
@@ -592,7 +595,7 @@
             document.getElementById('status').innerText = "Status: Complete";
             document.getElementById('map-title').style.display = 'block';
             document.getElementById('heatmap').style.display = 'block';
-            document.getElementById('dl-btn').style.display = 'block';
+            document.getElementById('dl-btn').style.display = 'flex';
             
             document.getElementById('metrics-container').style.display = 'flex';
             document.getElementById('val-slope').innerText = avgSlope.toFixed(3) + " CU/dB";
@@ -603,156 +606,142 @@
             document.getElementById('val-sd').innerText =
                 sds[Math.floor(sds.length / 2)].toFixed(1) + " dB";
 
-            renderHeatmap();
+            renderContours();
         }, 100);
     }
 
-function renderHeatmap() {
+    // Equal-loudness contours. Each curve is one category boundary: the level
+    // that elicits CU 5, 10, ... 50 as a function of frequency, which is what
+    // qcls_report returns directly. The shaded band is +/- 1 SD from the model
+    // mixture, so a wide band marks a boundary this run did not pin down.
+    //
+    // This replaces the categorical heatmap. The heatmap painted a color at
+    // every point of the frequency-by-level plane, which reads as a dense
+    // measurement even where nothing was measured and offered no way to show
+    // uncertainty. Contours show the estimate, its uncertainty, and the nine
+    // bands it is actually supported by.
+    function renderContours() {
         const canvas = document.getElementById('heatmap');
         const ctx = canvas.getContext('2d');
         const w = canvas.width, h = canvas.height;
-        const padL = 55, padB = 45;
-        const plotW = w - padL, plotH = h - padB;
-        
+        const padL = 55, padB = 45, padT = 12, padR = 46;
+        const plotW = w - padL - padR, plotH = h - padB - padT;
+
         ctx.fillStyle = "white";
         ctx.fillRect(0, 0, w, h);
-
-        // Allocate memory for the 10 boundaries returned by C
-        const ptrOut = Module._malloc(10 * 4); // 10 floats * 4 bytes
-        const bounds = new Float32Array(Module.HEAPF32.buffer, ptrOut, 10);
-
-        for(let px = 0; px < plotW; px += 5) {
-            // Calculate frequency for this X coordinate
-            let f = 125 * Math.pow(8000/125, px/plotW);
-            
-            // Ask the Bayesian model for the exact dB boundaries at this frequency
-            Module._get_loudness_boundaries(f, ptrOut);
-
-            for(let py = 0; py < plotH; py += 5) {
-                // Calculate dB SPL for this Y coordinate
-                let l = 100 - (py/plotH * 100);
-                
-                // Determine which categorical band this level falls into
-                let categoryIdx = 0;
-                for (let b = 0; b < 10; b++) {
-                    if (l >= bounds[b]) {
-                        categoryIdx = b + 1;
-                    }
-                }
-                
-                // Paint the exact categorical band color
-                ctx.fillStyle = colors[categoryIdx];
-                ctx.fillRect(padL + px, py, 5, 5);
-            }
-        }
-        
-        // Free Wasm memory
-        Module._free(ptrOut);
-
-        drawTrackerOverlay(ctx, padL, plotW, plotH);
-
-        // --- Draw Labels and Axes ---
-        ctx.fillStyle = "#333";
-        ctx.font = "14px 'Segoe UI', sans-serif";
-        ctx.textAlign = "center";
-        ctx.fillText("frequency (kHz)", padL + (plotW / 2), h - 5);
-        ctx.fillText("0.125", padL + 15, h - 25); 
-        ctx.fillText("1", padL + (plotW * 0.5), h - 25); 
-        ctx.fillText("8", padL + plotW - 10, h - 25);
-        
-        ctx.save();
-        ctx.translate(15, plotH / 2);
-        ctx.rotate(-Math.PI / 2);
-        ctx.textAlign = "center";
-        ctx.fillText("stimulus level (dB SPL)", 0, 0);
-        ctx.restore();
-        
-        ctx.textAlign = "right";
-        ctx.textBaseline = "middle";
-        ctx.fillText("100", padL - 8, 10);
-        ctx.fillText("50", padL - 8, plotH / 2);
-        ctx.fillText("0", padL - 8, plotH - 5);
-        
-        ctx.strokeStyle = "#333";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        ctx.moveTo(padL, 0); ctx.lineTo(padL, plotH); ctx.lineTo(w, plotH);
-        ctx.stroke();
-    }
-
-    // Overlay the Bayesian tracker's mixture estimate on the heatmap: three
-    // boundary contours, each with a +/- 1 SD band. The heatmap itself comes
-    // from the MCPF point estimate, which carries no uncertainty, so these
-    // curves show both what the tracker independently concluded and how well
-    // the run actually pinned it down. Where the band is wide, the run did
-    // not constrain that boundary and the color underneath is overconfident.
-    function drawTrackerOverlay(ctx, padL, plotW, plotH) {
         if (!session.report) return;
 
-        const bandHz = [250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000];
-        const xOf = (f) => padL + plotW * Math.log(f / 125) / Math.log(8000 / 125);
-        const yOf = (l) => plotH * (100 - l) / 100;
+        const F0 = 250, F1 = 6000, LMAX = 110;
+        const xOf = (f) => padL + plotW * Math.log(f / F0) / Math.log(F1 / F0);
+        const yOf = (l) => padT + plotH * (LMAX - l) / LMAX;
 
-        // CU 5, 25 and 50: the bottom, middle and top of the loudness function
-        const contours = [
-            { b: 0, label: "CU 5",  color: "#0033cc" },
-            { b: 4, label: "CU 25", color: "#006600" },
-            { b: 9, label: "CU 50", color: "#cc0000" }
-        ];
+        ctx.strokeStyle = "#eee";
+        ctx.lineWidth = 1;
+        [250, 500, 1000, 2000, 4000, 6000].forEach((f) => {
+            ctx.beginPath(); ctx.moveTo(xOf(f), padT); ctx.lineTo(xOf(f), padT + plotH); ctx.stroke();
+        });
+        for (let l = 0; l <= LMAX; l += 20) {
+            ctx.beginPath(); ctx.moveTo(padL, yOf(l)); ctx.lineTo(padL + plotW, yOf(l)); ctx.stroke();
+        }
 
         ctx.save();
-        ctx.beginPath();
-        ctx.rect(padL, 0, plotW, plotH);
-        ctx.clip();
+        ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
 
-        contours.forEach((c) => {
-            const mu = bandHz.map((f, i) => session.report.mu[i * 10 + c.b]);
-            const sd = bandHz.map((f, i) => session.report.sd[i * 10 + c.b]);
+        // Loudest first, so the quiet contours draw over the wide bands above.
+        for (let b = 9; b >= 0; b--) {
+            const mu = AUDIO_BANDS.map((f, i) => session.report.mu[i * 10 + b]);
+            const sd = AUDIO_BANDS.map((f, i) => session.report.sd[i * 10 + b]);
+            const col = colors[b + 1];
 
-            ctx.fillStyle = c.color + "33";
+            ctx.fillStyle = col + "2b";
             ctx.beginPath();
-            bandHz.forEach((f, i) => {
+            AUDIO_BANDS.forEach((f, i) => {
                 const x = xOf(f), y = yOf(mu[i] + sd[i]);
                 i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
             });
-            for (let i = bandHz.length - 1; i >= 0; i--) {
-                ctx.lineTo(xOf(bandHz[i]), yOf(mu[i] - sd[i]));
+            for (let i = AUDIO_BANDS.length - 1; i >= 0; i--) {
+                ctx.lineTo(xOf(AUDIO_BANDS[i]), yOf(mu[i] - sd[i]));
             }
-            ctx.closePath();
-            ctx.fill();
+            ctx.closePath(); ctx.fill();
 
-            // White halo under each line, so the contour stays readable
-            // against whatever saturated color the heatmap paints beneath it.
-            const trace = () => {
-                ctx.beginPath();
-                bandHz.forEach((f, i) => {
-                    const x = xOf(f), y = yOf(mu[i]);
-                    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-                });
-            };
-            ctx.strokeStyle = "rgba(255,255,255,0.9)";
-            ctx.lineWidth = 5;
-            trace(); ctx.stroke();
-            ctx.strokeStyle = c.color;
-            ctx.lineWidth = 2;
-            trace(); ctx.stroke();
+            ctx.strokeStyle = col; ctx.lineWidth = 2;
+            ctx.beginPath();
+            AUDIO_BANDS.forEach((f, i) => {
+                const x = xOf(f), y = yOf(mu[i]);
+                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+            });
+            ctx.stroke();
 
-            // Label at the low-frequency end, where there is room inside the
-            // plot; labeling the 6 kHz end runs the text into the clip edge.
-            ctx.font = "bold 11px 'Segoe UI', sans-serif";
-            ctx.textAlign = "left";
-            ctx.textBaseline = "bottom";
-            ctx.lineWidth = 3;
-            ctx.strokeStyle = "rgba(255,255,255,0.9)";
-            ctx.strokeText(c.label, xOf(bandHz[0]) + 4, yOf(mu[0]) - 3);
-            ctx.fillStyle = c.color;
-            ctx.fillText(c.label, xOf(bandHz[0]) + 4, yOf(mu[0]) - 3);
+            ctx.fillStyle = col;
+            AUDIO_BANDS.forEach((f, i) => {
+                ctx.beginPath(); ctx.arc(xOf(f), yOf(mu[i]), 2.5, 0, Math.PI * 2); ctx.fill();
+            });
+        }
+        ctx.restore();
+
+        ctx.font = "11px 'Segoe UI', sans-serif";
+        ctx.textAlign = "left"; ctx.textBaseline = "middle";
+        for (let b = 0; b < 10; b++) {
+            if (b % 2 === 0 || b === 9) {
+                const y = yOf(session.report.mu[(AUDIO_BANDS.length - 1) * 10 + b]);
+                if (y < padT - 4 || y > padT + plotH + 4) continue;
+                ctx.fillStyle = colors[b + 1];
+                ctx.fillText("CU " + ((b + 1) * 5), padL + plotW + 5, y);
+            }
+        }
+
+        ctx.strokeStyle = "#333"; ctx.lineWidth = 1;
+        ctx.beginPath();
+        ctx.moveTo(padL, padT); ctx.lineTo(padL, padT + plotH); ctx.lineTo(padL + plotW, padT + plotH);
+        ctx.stroke();
+
+        ctx.fillStyle = "#333"; ctx.font = "12px 'Segoe UI', sans-serif";
+        ctx.textAlign = "center"; ctx.textBaseline = "top";
+        [[250,"0.25"],[500,"0.5"],[1000,"1"],[2000,"2"],[4000,"4"],[6000,"6"]].forEach(([f, t]) => {
+            ctx.fillText(t, xOf(f), padT + plotH + 6);
         });
+        ctx.fillText("frequency (kHz)", padL + plotW / 2, h - 18);
 
+        ctx.textAlign = "right"; ctx.textBaseline = "middle";
+        for (let l = 0; l <= LMAX; l += 20) ctx.fillText(String(l), padL - 8, yOf(l));
+        ctx.save();
+        ctx.translate(14, padT + plotH / 2); ctx.rotate(-Math.PI / 2);
+        ctx.textAlign = "center"; ctx.textBaseline = "middle";
+        ctx.fillText("stimulus level (dB SPL)", 0, 0);
         ctx.restore();
     }
+    // Equal-loudness contours: the result of the test rather than its raw
+    // input. One row per band and category boundary, carrying the mixture
+    // mean and its standard deviation. Without this the estimate exists only
+    // as pixels and anyone analyzing a session has to re-derive it.
+    function downloadELC() {
+        if (!session.report) return;
+        let csv = "Band,Freq_Hz,CU,Level_dB_SPL,SD_dB\n";
+        AUDIO_BANDS.forEach((f, i) => {
+            for (let b = 0; b < 10; b++) {
+                csv += `${i + 1},${f},${(b + 1) * 5},` +
+                       `${session.report.mu[i * 10 + b].toFixed(2)},` +
+                       `${session.report.sd[i * 10 + b].toFixed(2)}\n`;
+            }
+        });
+        saveCSV(csv, "ELC");
+    }
 
-    function downloadCSV() {
+    function saveCSV(csv, kind) {
+        const subjId = document.getElementById('participant-id').value;
+        const earFmt = document.getElementById('test-ear').value.charAt(0).toUpperCase();
+        const today = new Date();
+        const dateStr = `${today.getFullYear()}` +
+                        `${String(today.getMonth() + 1).padStart(2, '0')}` +
+                        `${String(today.getDate()).padStart(2, '0')}`;
+        const a = document.createElement('a');
+        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
+        a.download = `qCLS_${kind}_${subjId}_${earFmt}_${dateStr}.csv`;
+        a.click();
+    }
+
+    // Trial by trial: what was presented and what the listener said.
+    function downloadTBT() {
         let csv = "Phase,Trial,Freq,Level,Response\n";
         let countP1 = 0, countP2 = 0;
         
@@ -763,21 +752,7 @@ function renderHeatmap() {
             csv += `${t.p},${trialNum},${t.f.toFixed(0)},${t.l.toFixed(1)},${t.r}\n`;
         });
         
-        const subjId = document.getElementById('participant-id').value;
-        const earRaw = document.getElementById('test-ear').value;
-        const earFmt = earRaw.charAt(0).toUpperCase();
-
-        const today = new Date();
-        const yyyy = today.getFullYear();
-        const mm = String(today.getMonth() + 1).padStart(2, '0');
-        const dd = String(today.getDate()).padStart(2, '0');
-        const dateStr = `${yyyy}${mm}${dd}`;
-
-        const blob = new Blob([csv], { type: 'text/csv' });
-        const a = document.createElement('a');
-        a.href = URL.createObjectURL(blob);
-        a.download = `qCLS_${subjId}_${earFmt}_${dateStr}.csv`;
-        a.click();
+        saveCSV(csv, "TBT");
     }
 </script>
 </body>

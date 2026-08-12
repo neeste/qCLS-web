@@ -46,6 +46,11 @@ static const float CUK0[9][3][2] = {
 // Reference equivalent threshold SPL, used to convert dB HL to dB SPL.
 static const float RETSPL[10] = {30.0f,19.0f,12.0f,10.0f,9.0f,15.0f,15.5f,13.0f,13.0f,14.0f};
 
+// Band center frequencies. Shared by the Hz-to-index mapping and by stimulus
+// selection, so a chosen band is presented at a frequency the model has a
+// band for.
+static const float BAND_HZ[N_FREQS] = {250,500,750,1000,1500,2000,3000,4000,6000};
+
 typedef enum { STIM_TONE = 0, STIM_SAM_TONE, STIM_FIVE_TONE } StimulusType;
 
 // --- STRUCTS ---
@@ -447,13 +452,12 @@ void qcls_audiogram_prior(float* thr, int units_are_hl) {
 // get_loudness_boundaries and the MATLAB catalog use. calc_alpha interpolates
 // continuously, so a fractional index is meaningful and no rounding is needed.
 static float bap_freq_index(float f_hz) {
-    static const float fc[N_FREQS] = {250,500,750,1000,1500,2000,3000,4000,6000};
-    if (f_hz <= fc[0]) return 1.0f;
-    if (f_hz >= fc[N_FREQS-1]) return (float)N_FREQS;
+    if (f_hz <= BAND_HZ[0]) return 1.0f;
+    if (f_hz >= BAND_HZ[N_FREQS-1]) return (float)N_FREQS;
     for (int i = 0; i < N_FREQS - 1; i++) {
-        if (f_hz <= fc[i+1]) {
-            float t = (log10f(f_hz) - log10f(fc[i])) /
-                      (log10f(fc[i+1]) - log10f(fc[i]));
+        if (f_hz <= BAND_HZ[i+1]) {
+            float t = (log10f(f_hz) - log10f(BAND_HZ[i])) /
+                      (log10f(BAND_HZ[i+1]) - log10f(BAND_HZ[i]));
             return (float)(i + 1) + t;
         }
     }
@@ -570,20 +574,37 @@ void calculate_bap_next(
         global_qcls_state.trial_n++;
     }
 
-    int freq_candidate_idx = (rand() % N_FREQS) + 1;
-    float logMin = log10f(250.0f);
-    float logMax = log10f(6000.0f);
-    float freq_fraction = (float)(freq_candidate_idx - 1) / (float)(N_FREQS - 1);
-    *out_f = powf(10.0f, logMin + freq_fraction * (logMax - logMin));
+    // Choose the next stimulus from the posterior instead of at random:
+    // present the band and level where the mixture is least certain, which
+    // is where a trial has the most to tell us. Testing at the boundary's
+    // own mean puts the stimulus where that boundary's response is closest
+    // to a coin flip. Once a trial lands there its SD falls and the next
+    // maximum moves elsewhere, so the rule spreads itself over the run.
+    //
+    // Previously this returned a uniformly random frequency and level and
+    // never consulted the posterior at all, which made the interface's
+    // "Bayesian" adaptive-tracking option identical to its "Random" one.
+    //
+    // On the CLS2023 catalog, posterior-driven selection has not beaten
+    // random overall: entropy MEI was neutral and a variance-targeted rule
+    // measured 0.696 dB worse, t = -5.7, while being markedly better at the
+    // CU5 end, 11.7 dB down to 6.8. Selection stays behind the interface
+    // switch so the two arms remain comparable on real listeners.
+    {
+        static float rmu[N_FREQS * 10], rsd[N_FREQS * 10];
+        qcls_report(rmu, rsd, NULL);
 
-    int min_step = (int)(min_L / 5.0f);
-    int max_step = (int)(max_L / 5.0f);
-    
-    if (max_step <= min_step) {
-        *out_l = min_L; 
-    } else {
-        int random_step = min_step + (rand() % (max_step - min_step + 1));
-        *out_l = (float)(random_step * 5);
+        int best = 0;
+        for (int i = 1; i < N_FREQS * 10; i++) if (rsd[i] > rsd[best]) best = i;
+
+        *out_f = BAND_HZ[best / 10];
+
+        // A little jitter around the mean, so a run does not keep landing on
+        // exactly one level and leave the slope between boundaries unsampled.
+        float lev = rmu[best] + (((float)(rand() % 101) / 100.0f) - 0.5f) * 5.0f;
+        if (lev < min_L) lev = min_L;
+        if (lev > max_L) lev = max_L;
+        *out_l = 5.0f * floorf(lev / 5.0f + 0.5f);
     }
 }
 
