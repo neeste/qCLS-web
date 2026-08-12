@@ -44,7 +44,52 @@ static const float CUK0[9][3][2] = {
   { {45.121980f,21.822886f}, {88.558375f,11.690277f}, {112.748055f,11.112123f} },
 };
 // Reference equivalent threshold SPL, used to convert dB HL to dB SPL.
-static const float RETSPL[10] = {30.0f,19.0f,12.0f,10.0f,9.0f,15.0f,15.5f,13.0f,13.0f,14.0f};
+//
+// RETSPL depends on the transducer, and the difference is not small: insert
+// earphones sit roughly 10 dB below supra-aural at 250 Hz, which is where the
+// regression of the CU5 boundary on threshold has its steepest slope, 0.778.
+// Passing dB HL measured on inserts through a supra-aural table therefore
+// shifts the low-frequency prior by more than the residual scatter it is
+// built on. It would not fail loudly.
+//
+// Index with a RetsplSet value. RETSPL_LEGACY reproduces the single table
+// that was hardcoded here, and is the default, so nothing changes unless a
+// transducer is chosen deliberately.
+//
+// VERIFY BEFORE CLINICAL USE. The non-legacy rows are the nominal published
+// values for those transducers and are provided so the mechanism is usable,
+// not as a substitute for the calibration in force where the test runs. Check
+// them against ANSI S3.6 and against your own coupler measurements, and
+// correct them here and in qCLS_audiogram_prior.m together: the two must
+// agree or the MATLAB and WebAssembly paths will disagree about the prior.
+typedef enum {
+    RETSPL_LEGACY = 0,   // the table previously hardcoded, provenance unrecorded
+    RETSPL_TDH39,        // supra-aural, NBS 9A coupler
+    RETSPL_TDH49,        // supra-aural, NBS 9A coupler
+    RETSPL_ER3A,         // insert, HA-2 with rigid tube
+    RETSPL_HDA200,       // circumaural
+    RETSPL_NSETS
+} RetsplSet;
+
+// Columns: 250 500 750 1000 1500 2000 3000 4000 6000 8000 Hz.
+static const float RETSPL_TABLE[RETSPL_NSETS][10] = {
+    {30.0f, 19.0f, 12.0f, 10.0f,  9.0f, 15.0f, 15.5f, 13.0f, 13.0f, 14.0f},
+    {25.5f, 11.5f,  8.0f,  7.0f,  6.5f,  9.0f, 10.0f,  9.5f, 15.5f, 13.0f},
+    {26.5f, 13.5f,  8.5f,  7.5f,  7.5f, 11.0f,  9.5f, 10.5f, 13.5f, 13.0f},
+    {14.0f,  5.5f,  2.0f,  0.0f,  2.0f,  3.0f,  3.5f,  5.5f,  2.0f,  0.0f},
+    {30.5f, 18.0f, 17.0f, 16.5f, 16.0f, 16.0f, 14.0f, 16.0f, 21.0f, 15.5f}
+};
+
+// Which set qcls_audiogram_prior uses. Set through qcls_set_transducer.
+static int retspl_set = RETSPL_LEGACY;
+
+// Select the transducer whose RETSPL converts dB HL to dB SPL. Out-of-range
+// values leave the current selection alone and return the active one, so a
+// caller cannot silently land on a wrong table.
+int qcls_set_transducer(int which) {
+    if (which >= 0 && which < RETSPL_NSETS) retspl_set = which;
+    return retspl_set;
+}
 
 // Band center frequencies. Shared by the Hz-to-index mapping and by stimulus
 // selection, so a chosen band is presented at a frequency the model has a
@@ -99,6 +144,7 @@ static int qcls_par_ready = 0;
 // --- FORWARD DECLARATIONS ---
 void qcls_seed_models(void);
 void qcls_audiogram_prior(float* thr, int units_are_hl);
+int  qcls_set_transducer(int which);
 void qcls_report(float* out_mu, float* out_sd, float* out_muMAP);
 float Kalman_update(qCLS_State* qcls, float* phi, float* P, float* kfreqs, int phi_len, float freq, float lev, int* r_bool);
 void CLS_psycfun(qCLS_State* qcls, float freq, float lev, float* kfreqs, float* phi, float* p_out);
@@ -418,7 +464,7 @@ void qcls_audiogram_prior(float* thr, int units_are_hl) {
 
     for (int f = 0; f < N_FREQS; f++) {
         float t = thr ? thr[f] : NAN;
-        if (units_are_hl && !isnan(t)) t += RETSPL[f];
+        if (units_are_hl && !isnan(t)) t += RETSPL_TABLE[retspl_set][f];
 
         for (int j = 0; j < 3; j++) {
             float mu, sd;

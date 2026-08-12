@@ -120,6 +120,13 @@
                     <option value="hl" selected>thresholds in dB HL</option>
                     <option value="spl">thresholds in dB SPL</option>
                 </select>
+                <select id="transducer" style="margin-bottom:6px;">
+                    <option value="0" selected>transducer: unspecified (legacy)</option>
+                    <option value="1">TDH-39 supra-aural</option>
+                    <option value="2">TDH-49/50 supra-aural</option>
+                    <option value="3">ER-3A insert</option>
+                    <option value="4">HDA200 circumaural</option>
+                </select>
                 <div id="audiogram-grid" style="display:grid; grid-template-columns:repeat(3,1fr); gap:4px;"></div>
                 <span style="font-size:0.78em; color:#666; display:block; margin-top:5px;">
                     Leave any frequency blank if it was not measured. Blanks fall
@@ -289,7 +296,21 @@
 
     // Reference equivalent threshold SPL, for converting dB HL to dB SPL.
     // Same values as RETSPL in qcls_core.c.
-    const RETSPL = [30, 19, 12, 10, 9, 15, 15.5, 13, 13];
+    // Same tables as RETSPL_TABLE in qcls_core.c, in the order of the
+    // transducer selector. Duplicated here because the contour plot converts
+    // the audiogram to dB SPL for display without going through the wasm.
+    // These must be kept in step with the C and with qCLS_audiogram_prior.m.
+    const RETSPL_SETS = [
+        [30.0, 19.0, 12.0, 10.0,  9.0, 15.0, 15.5, 13.0, 13.0],   // legacy
+        [25.5, 11.5,  8.0,  7.0,  6.5,  9.0, 10.0,  9.5, 15.5],   // TDH-39
+        [26.5, 13.5,  8.5,  7.5,  7.5, 11.0,  9.5, 10.5, 13.5],   // TDH-49/50
+        [14.0,  5.5,  2.0,  0.0,  2.0,  3.0,  3.5,  5.5,  2.0],   // ER-3A
+        [30.5, 18.0, 17.0, 16.5, 16.0, 16.0, 14.0, 16.0, 21.0]    // HDA200
+    ];
+    function retspl() {
+        const el = document.getElementById('transducer');
+        return RETSPL_SETS[el ? (parseInt(el.value) || 0) : 0];
+    }
 
     // Output limits. ABS_MAX_SPL is the equipment ceiling and is never
     // exceeded whatever the operator enters. LDL_BACKOFF_DB is how far the
@@ -334,7 +355,7 @@
 
         // Keep a copy in dB SPL so the contour plot, whose level axis is SPL,
         // can show the audiogram against the CU5 contour.
-        session.audiogramSPL = vals.map((v, i) => isFinite(v) ? (isHL ? v + RETSPL[i] : v) : NaN);
+        session.audiogramSPL = vals.map((v, i) => isFinite(v) ? (isHL ? v + retspl()[i] : v) : NaN);
 
         // No thresholds at all means the stock prior, not a prior built from
         // nine fallbacks, so an empty form behaves exactly as before.
@@ -344,7 +365,10 @@
         const view = new Float32Array(Module.HEAPF32.buffer, ptr, 10);
         for (let i = 0; i < 9; i++) view[i] = vals[i];
         view[9] = NaN;                        // 8 kHz, outside the BAP bands
-        Module._qcls_audiogram_prior(ptr, document.getElementById('audio-units').value === 'hl' ? 1 : 0);
+        // Choose the RETSPL table before converting. Only affects dB HL, but
+        // set it either way so the C and the page never drift apart.
+        Module._qcls_set_transducer(parseInt(document.getElementById('transducer').value) || 0);
+        Module._qcls_audiogram_prior(ptr, isHL ? 1 : 0);
         Module._free(ptr);
         return measured;
     }
@@ -375,6 +399,7 @@
 
         AUDIO_BANDS.forEach((f) => { document.getElementById('thr-' + f).disabled = true; });
         document.getElementById('audio-units').disabled = true;
+        document.getElementById('transducer').disabled = true;
         document.getElementById('run-btn').disabled = true;
         document.getElementById('cal-btn').disabled = true;
         document.getElementById('test-ear').disabled = true;
