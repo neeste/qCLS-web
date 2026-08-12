@@ -877,26 +877,31 @@ void estimate_mcpf(float* history_f, float* history_l, float* history_r, int num
     reconstruct_theta(w_opt, global_estimated_theta);
 }
 
-// Geometric mean of the 100 psychometric slopes, in 1/dB.
+// Mean of the 100 psychometric slopes, in 1/dB. Negative by convention.
 //
-// theta stores these as LOG slopes: they enter the psychometric function as
-// 1/(1+exp(-slp*(lev-md))), so the stored value has to be exponentiated
-// before it means anything. This returned the mean of the logs, which is
-// negative, and the interface displayed it as "CU/dB" -- a negative loudness
-// slope, which would be a psychometric function that falls with level. The
-// mean is taken in log space and exponentiated because that is the space the
-// parameter is modeled and priored in.
+// The stored values are the slopes themselves, not their logs. mcpf_bnd.m
+// returns slp = -exp(logs5 + (logs50-logs5)*u), and the catalog stores that
+// result directly; checked against coeff_tenfrq_v3, the stored coefficients
+// match mcpf_bnd's slopes to 0.00000. They are negative because the
+// psychometric function is written 1/(1+exp(-slp*(lev-md))), which with a
+// negative slope is high below the boundary and low above it.
 //
-// Note this is the steepness of a category boundary, not the rate at which
-// loudness grows. It is not in CU/dB and should not be labeled as such.
+// An earlier version of this function exponentiated the mean, on the
+// mistaken reading that a negative value had to be a log. That turned a
+// correct slope into a meaningless positive number. Do not reintroduce it.
+//
+// This is the steepness of a category boundary, not the rate at which
+// loudness grows, so it is not in CU/dB. The interface reports loudness
+// growth from the CU5 and CU50 contours instead, which is a different
+// quantity and genuinely in CU/dB.
 float get_average_slope() {
-    float sum_log_slope = 0;
+    float sum_slope = 0;
     for (int i=0; i<10; i++) {
         for (int k=0; k<10; k++) {
-            sum_log_slope += global_estimated_theta[i*20 + k];
+            sum_slope += global_estimated_theta[i*20 + k];
         }
     }
-    return expf(sum_log_slope / 100.0f);
+    return sum_slope / 100.0f;
 }
 
 // Mean of the fitted false-alarm rates.
