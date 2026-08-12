@@ -96,6 +96,17 @@
             </div>
 
             <div class="input-group">
+                <label>Max Output (dB SPL)</label>
+                <input type="number" id="max-output" value="100" min="50" max="110" step="5">
+                <span style="font-size:0.78em; color:#666; display:block; margin-top:4px;">
+                    Nothing is presented above this level. Lower it for a
+                    listener with reduced tolerance. It is also lowered
+                    automatically, by 5 dB, each time "Too Loud" is reported,
+                    and never raised during a run.
+                </span>
+            </div>
+
+            <div class="input-group">
                 <label>Adaptive Tracking</label>
                 <select id="adaptive-tracking">
                     <option value="0">Random</option>
@@ -185,7 +196,7 @@
     let session = {
         p1Trials: 0, p2Trials: 0, 
         phase: 'P1', p1Dir: -1, 
-        minL: -10, maxL: 110, curL: 50, curF: 1000, startL: 50, startVal: null,
+        minL: -10, maxL: 110, ceiling: 110, curL: 50, curF: 1000, startL: 50, startVal: null,
         history: [],
         report: null
     };
@@ -280,6 +291,23 @@
     // Same values as RETSPL in qcls_core.c.
     const RETSPL = [30, 19, 12, 10, 9, 15, 15.5, 13, 13];
 
+    // Output limits. ABS_MAX_SPL is the equipment ceiling and is never
+    // exceeded whatever the operator enters. LDL_BACKOFF_DB is how far the
+    // working ceiling drops each time the listener reports "Too Loud".
+    //
+    // This matters more since stimulus selection began consulting the
+    // posterior: that rule deliberately presents the least certain boundary,
+    // and CU50 sits near the top of the range, so an unbounded run tends
+    // toward the loudest levels rather than away from them.
+    const ABS_MAX_SPL = 110;
+    const LDL_BACKOFF_DB = 5;
+
+    // One step below a level just reported too loud, never below a floor that
+    // would leave no usable range.
+    function backoffFrom(lev) {
+        return Math.max(session.minL + 10, lev - LDL_BACKOFF_DB);
+    }
+
     function buildAudiogramInputs() {
         document.getElementById('audiogram-grid').innerHTML = AUDIO_BANDS.map((f) =>
             `<div style="text-align:center;">
@@ -330,7 +358,12 @@
         session.startL = parseFloat(document.getElementById('start-level').value) || 50;
         session.curL = session.startL;
         session.minL = -10;
-        session.maxL = 110;
+        // Operator ceiling. Nothing reaches the listener above this, and the
+        // equipment limit still caps it. maxL is the working ceiling, which
+        // only ever ratchets down from here as discomfort is reported.
+        const askedCeiling = parseFloat(document.getElementById('max-output').value);
+        session.ceiling = Math.min(ABS_MAX_SPL, Math.max(50, isFinite(askedCeiling) ? askedCeiling : 100));
+        session.maxL = session.ceiling;
         session.phase = 'P1';
         session.p1Dir = -1; // -1 = Descending First
         session.p1Trials = 0;
@@ -349,6 +382,7 @@
         document.getElementById('stim-bw').disabled = true;
         document.getElementById('center-freq').disabled = true;
         document.getElementById('start-level').disabled = true;
+        document.getElementById('max-output').disabled = true;
         document.getElementById('adaptive-tracking').disabled = true;
         
         document.getElementById('progress-container').style.display = 'flex';
@@ -392,6 +426,11 @@
 
         const wasmAudioView = new Float32Array(Module.HEAPF32.buffer, bufferPointer, numSamples);
 
+        // Final guard, immediately before level becomes sound. Every path
+        // upstream clamps already; this one exists so that no future path can
+        // reach the listener without passing a limit.
+        const lim = Math.min(session.ceiling, ABS_MAX_SPL);
+        if (!(session.curL <= lim)) session.curL = lim;   // also catches NaN
         const rmsTarget = Math.pow(10, (session.curL - 60) / 20);
         const amp = rmsTarget * Math.sqrt(2);
 
@@ -459,7 +498,7 @@
                     
                     // If the starting value was already "Too Loud", skip ascending entirely
                     if (session.startVal === 50) {
-                        session.maxL = session.startL;
+                        session.maxL = backoffFrom(session.startL);
                         session.phase = 'P2';
                         branchPhase2();
                     } else {
@@ -473,8 +512,8 @@
                 }
             } else { 
                 // ASCENDING PORTION
-                if (val === 50 || session.curL >= 110) {
-                    session.maxL = session.curL;
+                if (val === 50 || session.curL >= session.ceiling) {
+                    session.maxL = backoffFrom(session.curL);
                     session.phase = 'P2';
                     branchPhase2();
                 } else {
@@ -486,13 +525,18 @@
 
         } else {
             // PHASE 2 TRACKING
-            if (val === 50 && session.curL < session.maxL) session.maxL = session.curL;
+            // Back off below the level just called too loud, rather than to
+            // it. The previous rule only fired when curL < maxL, so a
+            // listener reporting "Too Loud" at the ceiling never moved it and
+            // could be presented that level repeatedly.
+            if (val === 50) session.maxL = Math.min(session.maxL, backoffFrom(session.curL));
             if (val === 0 && session.curL > session.minL) session.minL = session.curL;
             branchPhase2();
         }
         
         // Final absolute safety bounds
-        if (session.curL > 110) session.curL = 110;
+        if (session.curL > session.ceiling) session.curL = session.ceiling;
+        if (session.curL > session.maxL) session.curL = session.maxL;
         if (session.curL < -10) session.curL = -10;
     }
 
@@ -592,7 +636,9 @@
             const ptrMu = Module._malloc(90 * 4);
             const ptrSd = Module._malloc(90 * 4);
 
-            Module._calculate_bap_next(ptrF, ptrL, ptrR, numTrials, 0, 0, 110, ptrNF, ptrNL);
+            // Replay only, to bring the posterior current; the stimulus it
+            // proposes is discarded. Bounded by the session ceiling anyway.
+            Module._calculate_bap_next(ptrF, ptrL, ptrR, numTrials, 0, 0, session.ceiling, ptrNF, ptrNL);
             Module._qcls_report(ptrMu, ptrSd, 0);
 
             // 9 bands x 10 boundaries, frequency-major: index = band*10 + b
