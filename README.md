@@ -49,23 +49,35 @@ Before the BAP takes over, Phase 1 establishes the listener's dynamic range usin
 3. **Ascending:** The test jumps back to the initial Start Level. If the very first response was "Loud" or greater, the ascending step size is set to **5 dB**. Otherwise, it uses **10 dB** steps. It ascends until the listener responds "Too Loud" or the level reaches the **Max Output** ceiling. This locks in the working maximum, which thereafter only ratchets downward (see Safety).
 
 ### Phase 2: Bayesian Adaptive Tracking
-Once bounded, Phase 2 begins. On every trial:
-1. JavaScript allocates a block of shared WebAssembly memory (`Module.HEAPF32`).
-2. The entire trial history (frequencies, levels, and responses) is copied into this shared memory.
-3. JavaScript calls the compiled C function `_calculate_bap_next`.
-4. The C engine resets the state, loops through the history, and runs the `Kalman_update` to build the current posterior model of the listener.
-5. The C engine selects the next frequency and level from the posterior, bounded by the Phase 1 limits and the Max Output ceiling, and passes the target back to JavaScript.
+Once bounded, Phase 2 begins. After every response:
+1. JavaScript sends the completed trial to the compiled C engine.
+2. The C engine updates all 21 candidate anchor-frequency models once with that trial.
+3. The selected adaptive mode requests the next frequency and level from the current posterior, bounded by the Phase 1 limits and the Max Output ceiling.
+
+The posterior is updated incrementally. The completed trial is not appended to a
+history buffer and replayed for each stimulus decision. Bayesian mode selects
+the most uncertain boundary. isoPhon selects a random BAP band and then one of
+the CU 10, 20, 30, or 40 boundary estimates from the same current posterior.
 
 ## 4. Audio Generation & Routing
 Stimulus generation (Pure Tones, SAM-Tones, and Five-Tone Complexes) is calculated sample-by-sample in the C engine to ensure phase accuracy and precise RMS scaling.
 When JavaScript requests a stimulus, the C engine writes the raw float data into shared memory. JavaScript reads this data, scales it to the target dB SPL, and feeds it into an `AudioBufferSourceNode`. The audio is then routed through a `StereoPannerNode` (directed by the UI's "Test Ear" dropdown) before reaching the hardware destination.
 
-## 5. Results Display: Equal-Loudness Contours
-The result is drawn as **equal-loudness contours**: one curve per category
-boundary, giving the level that elicits CU 5, 10, ... 50 as a function of
-frequency, which is what `qcls_report` returns directly. Each curve carries a
-shaded **+/- 1 SD band** from the model mixture, so a wide band marks a boundary
-this run did not pin down.
+## 5. Tracking and Final Results
+The application has two distinct stages. During data collection, a live
+parametric Bayesian tracker maintains 21 candidate anchor-frequency models.
+After each response, all 21 models are updated incrementally. The tracker then
+selects the next stimulus from the current posterior: Bayesian mode targets
+the most uncertain category boundary, while isoPhon selects a random BAP band
+and one of the CU 10, 20, 30, or 40 boundary estimates. The tracker is used
+for stimulus selection during the procedure, not for the final displayed fit.
+
+After data collection is complete, the browser sends the full trial history to
+the post-hoc PCA/MCPF maximum-likelihood fitter (`qcls_pca_fit_report`). This
+fit estimates a 5-component PCA profile, and the resulting category boundaries
+are displayed as **equal-loudness contours**: one curve per category boundary,
+giving the level that elicits CU 5, 10, ... 50 as a function of frequency. The
+current plot does not display uncertainty bands.
 
 If an audiogram was entered it is drawn over the contours as a dashed line,
 converted to dB SPL using the selected transducer's RETSPL. CU 5 and the
@@ -76,42 +88,20 @@ reports hearing, so the gap between the two curves is directly readable.
 > every point of the frequency-by-level plane. That read as a dense measurement
 > even where nothing was measured, and it had nowhere to put uncertainty.
 
-## 6. Estimators: Why the Tracker Is Authoritative
-The application previously ran two estimators: the Bayesian tracker and a
-Maximum Likelihood Estimator fitting a 210-parameter MCPF model through a
-10-component PCA latent space (`pca_model.h`, Nelder-Mead over the weights).
-
-**The MLE is no longer used.** Measured head to head on 98 ears carrying
-trial-by-trial data, recovering dynamic range at 1500 Hz against a reference
-built from full-data contours:
-
-| estimator | r vs reference | RMS | spread across listeners |
-|---|---|---|---|
-| tracker (`qcls_report`) | **0.924** | **8.9 dB** | 19.1 dB |
-| MCPF MLE | 0.296 | 14.4 dB | 2.7 dB |
-| *reference* | | | *14.7 dB* |
-
-The tracker was closer in 72 of 98 ears, and the two estimators correlated with
-each other at r = 0.049, so they were never two readings of one quantity. The
-MLE's spread of 2.7 dB against a reference spread of 14.7 means it returned
-close to the population mean for every listener, which is what 10 components
-over 210 parameters would predict.
-
-The C functions remain exported, and `pca_model.h` still ships, but nothing in
-the interface calls them. Displayed metrics come from the tracker or from the
-trials directly:
+The current interface displays one metric from the fitted contours:
 
 - **Loudness Growth** (CU/dB): 45 CU between the CU 5 and CU 50 contours divided
   by the level range they span, averaged over bands.
-- **False-Alarm Rate**: measured from the trials, as the proportion of
-  presentations more than 5 dB below the estimated CU 5 contour that still drew
-  a response above "can't hear", shown with the count it rests on and withheld
-  below 8 qualifying trials. Read it as a screening indicator, not a calibrated
-  rate.
-- **Posterior SD** (median): the tracker's own uncertainty, which split-half
-  testing found to be calibrated (reported 3.7 dB against 3.8 empirical).
 
-## 7. Safety: Output Ceiling and Discomfort Backoff
+The tracker and post-hoc fit are described in detail in:
+
+- Shen, Y., Petersen, E. A., & Neely, S. T. (2024). Toward parametric Bayesian
+  adaptive procedures for multi-frequency categorical loudness scaling. *The
+  Journal of the Acoustical Society of America, 156*(1), 262-277.
+- Shen, Y., Petersen, E. A., & Neely, S. T. (2026). Rapid profiling of loudness
+  perception among older adults. *Ear and Hearing, 47*(3), 716.
+
+## 6. Safety: Output Ceiling and Discomfort Backoff
 **Max Output (dB SPL)** sets the loudest level that will ever be presented.
 Default 100 dB SPL, and whatever is entered it is clamped to the 110 dB
 equipment limit: 130 becomes 110, 20 becomes 50, blank becomes 100. It is
@@ -127,7 +117,7 @@ CU 50 sits near the top of the range: an unbounded run tends toward the loudest
 levels rather than away from them. Lower the ceiling for a listener with
 reduced tolerance.
 
-## 8. Configuring the Audiogram Prior
+## 7. Configuring the Audiogram Prior
 Optional. Left blank, the procedure behaves exactly as it did before.
 
 - **Nine threshold fields**, 250 Hz to 6 kHz. Leave any frequency blank if it
@@ -149,28 +139,31 @@ Optional. Left blank, the procedure behaves exactly as it did before.
 Conditioning on the audiogram is worth 0.396 dB, SE 0.116, t = 3.4, on 148
 listeners replaying recorded responses.
 
-## 9. How to Use the App
+## 8. How to Use the App
 1. **Load the App:** Open `index.html` in any modern web browser. The app needs
    a local server, such as Python's `http.server`, so WebAssembly can load.
 2. **Configure:** Participant ID, Test Ear, Stimulus Type/Bandwidth, Start
    Level, and **Max Output**.
 3. **Optional:** Enter the audiogram, and set units and transducer to match how
    it was measured.
-4. **Calibrate:** Click **Calibrate** for a continuous 1 kHz tone at 60 dB SPL
-   to set your hardware. Click again to stop. Every level, contour and the
-   audiogram prior inherit this calibration.
+4. **Calibrate:** Click **Calibrate** for a continuous 1 kHz reference tone
+  labelled 60 dB SPL. Click again to stop. This is an operator check of the
+  audio path; it does not alter numerical stimulus levels, contour estimates,
+  or the audiogram prior.
 5. **Run Test:** Click **Run Test** to begin Phase 1.
 6. **Export:** On completion, two downloads are offered.
    - **Download trials (TBT)** is the raw input: phase, trial, frequency,
      level, response.
    - **Download contours (ELC)** is the result: 90 rows of band, frequency, CU,
-     level and SD.
+     and fitted level. It does not currently include uncertainty estimates.
    Filenames are `qCLS_TBT_[ID]_[Ear]_[YYYYMMDD].csv` and `qCLS_ELC_...`.
 
-## 10. Session Storage
+## 9. Session Storage
 Completed sessions are kept in the browser's `localStorage`, most recent first,
 capped at 50. Selecting one from **Previous Sessions** restores its contours,
-audiogram, trials and metrics.
+audiogram, trials and displayed growth metric. The saved mode label currently
+distinguishes Bayesian from non-Bayesian sessions; isoPhon sessions are labeled
+as Random when restored.
 
 This is per browser and per machine, not a record system. It protects against a
 lost reload, not a lost laptop. The CSV downloads remain the way results leave

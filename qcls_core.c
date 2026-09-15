@@ -1,6 +1,7 @@
 #include <math.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include <string.h>
 #include "pca_model.h"
 
 #define PI 3.14159265358979323846f
@@ -137,9 +138,8 @@ typedef struct {
 // Global instance of the test state
 qCLS_State global_qcls_state;
 
-// Set once the configuration is populated. calculate_bap_next reseeds the
-// posterior on every call but must not overwrite a prior the caller has
-// already conditioned on an audiogram.
+// Set once the configuration is populated. Incremental trial updates must not
+// overwrite a prior the caller has already conditioned on an audiogram.
 static int qcls_par_ready = 0;
 
 // --- FORWARD DECLARATIONS ---
@@ -152,6 +152,169 @@ void CLS_psycfun(qCLS_State* qcls, float freq, float lev, float* kfreqs, float* 
 void CLS_jacobian(qCLS_State* qcls, float freq, float lev, float* kfreqs, float* phi, int phi_len, float* H_out);
 void calc_alpha(qCLS_State* qcls, float freq, float* kfreqs, float* phi, float* alpha_out);
 float interpolate_pchip(float* x, float* y, int n, float xq);
+
+static void qcls_pca_init_model(qCLS_PCA_Model* model) {
+    if (!model) return;
+    *model = qcls_pca_model_default;
+    memcpy(model->mu, pca_mu, sizeof(pca_mu));
+    memcpy(model->d, pca_d, sizeof(pca_d));
+    memcpy(model->V, pca_V, sizeof(pca_V));
+    for (int i = 0; i < PCA_COMPONENTS; i++) {
+        model->score_mean[i] = pca_score_mean[i];
+        model->score_std[i]  = pca_score_std[i];
+    }
+}
+
+static void qcls_pca_reconstruct_cb(const qCLS_PCA_Model* model, const float* score, float* cb_out) {
+    for (int j = 0; j < PCA_PARAMS; j++) {
+        float xnorm = 0.0f;
+        for (int c = 0; c < PCA_COMPONENTS; c++) {
+            xnorm += score[c] * model->V[j * PCA_COMPONENTS + c];
+        }
+        // Match the MATLAB model: Xnorm_pred = s' * V';
+        // cb_pred = Xnorm_pred .* d + mu
+        cb_out[j] = xnorm * model->d[j] + model->mu[j];
+    }
+}
+
+static int qcls_pca_freq_index(float freq) {
+    static const float freq_list[10] = {250.0f, 500.0f, 750.0f, 1000.0f, 1500.0f, 2000.0f, 3000.0f, 4000.0f, 6000.0f, 8000.0f};
+    if (freq <= freq_list[0]) return 0;
+    if (freq >= freq_list[9]) return 9;
+    for (int i = 0; i < 9; i++) {
+        if (freq >= freq_list[i] && freq <= freq_list[i + 1]) {
+            float t = (freq - freq_list[i]) / (freq_list[i + 1] - freq_list[i]);
+            return (t > 0.5f) ? (i + 1) : i;
+        }
+    }
+    return 0;
+}
+
+static void qcls_pca_calc_alpha(const qCLS_PCA_Model* model, const float* score, float freq, float* alpha_out) {
+    float cb[PCA_PARAMS];
+    qcls_pca_reconstruct_cb(model, score, cb);
+
+    float f0 = floorf(freq);
+    float f1 = ceilf(freq);
+    int i0 = qcls_pca_freq_index(f0);
+    int i1 = qcls_pca_freq_index(f1);
+    if (i0 == i1) {
+        for (int k = 0; k < PCA_BOUNDARIES; k++) {
+            alpha_out[k] = cb[i0 * PCA_BOUNDARIES + k];
+        }
+        return;
+    }
+
+    for (int k = 0; k < PCA_BOUNDARIES; k++) {
+        float a0 = cb[i0 * PCA_BOUNDARIES + k];
+        float a1 = cb[i1 * PCA_BOUNDARIES + k];
+        float t = (freq - f0) / (f1 - f0);
+        alpha_out[k] = a0 + t * (a1 - a0);
+    }
+}
+
+static float qcls_pca_loglik(const qCLS_PCA_Model* model, const float* score,
+                            const float* history_f, const float* history_l,
+                            const float* history_r, int num_trials) {
+    float ll = 0.0f;
+    float p_chance[PCA_BOUNDARIES];
+    for (int k = 0; k < PCA_BOUNDARIES; k++) {
+        p_chance[k] = ((float)(PCA_NCATEGORIES - 1 - k)) / (float)PCA_NCATEGORIES;
+    }
+
+    for (int t = 0; t < num_trials; t++) {
+        float freq = history_f[t];
+        float lev = history_l[t];
+        // The browser stores responses in CU: 0, 5, ..., 50. Convert the
+        // response directly to the boundary events used by the likelihood.
+        int resp = (int)history_r[t];
+        if (resp < 0) resp = 0;
+        if (resp > (PCA_NCATEGORIES - 1) * 5) resp = (PCA_NCATEGORIES - 1) * 5;
+
+        float alpha[PCA_BOUNDARIES];
+        qcls_pca_calc_alpha(model, score, freq, alpha);
+        for (int k = 0; k < PCA_BOUNDARIES; k++) {
+            float p = model->par.lambda * p_chance[k] +
+                      (1.0f - model->par.lambda) / (1.0f + expf(-model->par.beta * (lev - alpha[k])));
+            if (p < 1e-6f) p = 1e-6f;
+            if (p > 1.0f - 1e-6f) p = 1.0f - 1e-6f;
+            int hit = (resp >= (k + 1) * 5);
+            ll += hit ? logf(p) : logf(1.0f - p);
+        }
+    }
+    return ll;
+}
+
+__attribute__((unused))
+static void qcls_pca_fit_posthoc(float* history_f, float* history_l, float* history_r,
+                                int num_trials, float* out_cb) {
+    qCLS_PCA_Model model;
+    qcls_pca_init_model(&model);
+
+    float best_score[PCA_COMPONENTS];
+    float best_ll = -1e30f;
+    int n_inits = 200;
+    for (int i = 0; i < n_inits; i++) {
+        float score[PCA_COMPONENTS];
+        for (int c = 0; c < PCA_COMPONENTS; c++) {
+            float z = (float)rand() / (float)RAND_MAX;
+            float gaussian = (z < 0.5f) ? sqrtf(-2.0f * logf(1.0f - z)) : -sqrtf(-2.0f * logf(1.0f - z));
+            score[c] = model.score_mean[c] + model.score_std[c] * gaussian;
+        }
+        float ll = qcls_pca_loglik(&model, score, history_f, history_l, history_r, num_trials);
+        if (ll > best_ll) {
+            best_ll = ll;
+            memcpy(best_score, score, sizeof(best_score));
+        }
+    }
+
+    float current[PCA_COMPONENTS];
+    memcpy(current, best_score, sizeof(current));
+    float step = 0.5f;
+    for (int iter = 0; iter < 80; iter++) {
+        float improved = 0.0f;
+        for (int c = 0; c < PCA_COMPONENTS; c++) {
+            float cand_up[PCA_COMPONENTS];
+            float cand_dn[PCA_COMPONENTS];
+            memcpy(cand_up, current, sizeof(cand_up));
+            memcpy(cand_dn, current, sizeof(cand_dn));
+            cand_up[c] += step;
+            cand_dn[c] -= step;
+
+            float ll_cur = qcls_pca_loglik(&model, current, history_f, history_l, history_r, num_trials);
+            float ll_up = qcls_pca_loglik(&model, cand_up, history_f, history_l, history_r, num_trials);
+            float ll_dn = qcls_pca_loglik(&model, cand_dn, history_f, history_l, history_r, num_trials);
+
+            if (ll_up > ll_cur && ll_up >= ll_dn) {
+                memcpy(current, cand_up, sizeof(current));
+                improved = 1.0f;
+            } else if (ll_dn > ll_cur) {
+                memcpy(current, cand_dn, sizeof(current));
+                improved = 1.0f;
+            }
+        }
+        if (!improved) {
+            step *= 0.5f;
+            if (step < 1e-4f) break;
+        }
+    }
+
+    qcls_pca_reconstruct_cb(&model, current, out_cb);
+}
+
+int qcls_pca_fit_report(float* history_f, float* history_l, float* history_r,
+                        int num_trials, float* out_mu) {
+    if (!out_mu) return 0;
+
+    float fitted[PCA_PARAMS];
+    qcls_pca_fit_posthoc(history_f, history_l, history_r, num_trials, fitted);
+
+    for (int i = 0; i < PCA_PARAMS; i++) {
+        out_mu[i] = fitted[i];
+    }
+
+    return 1;
+}
 
 // --- INITIALIZATION ---
 void init_bayesian_state() {
@@ -581,46 +744,41 @@ void qcls_report(float* out_mu, float* out_sd, float* out_muMAP) {
         }
         if (out_muMAP) out_muMAP[i] = A[best][i];
     }
+
 }
 
 // --- JAVASCRIPT BRIDGES ---
-void calculate_bap_next(
-    float* history_f, float* history_l, float* history_r, 
-    int num_trials, int p1_trials, float min_L, float max_L, 
-    float* out_f, float* out_l
-) {
-    // Reseed the posterior for this replay, but keep whatever prior the
-    // caller has set. Calling init_bayesian_state() here would silently
-    // discard an audiogram-conditioned prior on every trial.
+// Update every candidate model with exactly one completed trial. The browser
+// calls this once after each response, so the posterior remains incremental.
+void qcls_update_trial(float trial_f, float trial_l, float trial_r) {
     if (!qcls_par_ready) init_bayesian_state();
-    qcls_seed_models();
-
     int r_bool[10];
 
-    for (int i = 0; i < num_trials; i++) {
-        for (int b = 0; b < 10; b++) {
-            float boundary_val = (float)(b + 1) * 5.0f;
-            r_bool[b] = (history_r[i] >= boundary_val) ? 1 : 0;
-        }
-        float fidx = bap_freq_index(history_f[i]);
-
-        for (int m = 0; m < N_MODELS; m++) {
-            float ll = Kalman_update(
-                &global_qcls_state,
-                global_qcls_state.phi[m],
-                global_qcls_state.P[m],
-                global_qcls_state.mkfreqs[m],
-                PHI_LEN,
-                fidx,
-                history_l[i],
-                r_bool
-            );
-            global_qcls_state.Lmodels[m] =
-                global_qcls_state.par.likelihood_exp * global_qcls_state.Lmodels[m] + ll;
-        }
-        global_qcls_state.trial_n++;
+    for (int b = 0; b < 10; b++) {
+        float boundary_val = (float)(b + 1) * 5.0f;
+        r_bool[b] = (trial_r >= boundary_val) ? 1 : 0;
     }
 
+    float fidx = bap_freq_index(trial_f);
+    for (int m = 0; m < N_MODELS; m++) {
+        float ll = Kalman_update(
+            &global_qcls_state,
+            global_qcls_state.phi[m],
+            global_qcls_state.P[m],
+            global_qcls_state.mkfreqs[m],
+            PHI_LEN,
+            fidx,
+            trial_l,
+            r_bool
+        );
+        global_qcls_state.Lmodels[m] =
+            global_qcls_state.par.likelihood_exp * global_qcls_state.Lmodels[m] + ll;
+    }
+    global_qcls_state.trial_n++;
+}
+
+void qcls_select_bayesian_next(float min_L, float max_L, float* out_f, float* out_l) {
+    if (!qcls_par_ready) init_bayesian_state();
     // Choose the next stimulus from the posterior instead of at random:
     // present the band and level where the mixture is least certain, which
     // is where a trial has the most to tell us. Testing at the boundary's
@@ -637,22 +795,38 @@ void calculate_bap_next(
     // measured 0.696 dB worse, t = -5.7, while being markedly better at the
     // CU5 end, 11.7 dB down to 6.8. Selection stays behind the interface
     // switch so the two arms remain comparable on real listeners.
-    {
-        static float rmu[N_FREQS * 10], rsd[N_FREQS * 10];
-        qcls_report(rmu, rsd, NULL);
+    static float rmu[N_FREQS * 10], rsd[N_FREQS * 10];
+    qcls_report(rmu, rsd, NULL);
 
-        int best = 0;
-        for (int i = 1; i < N_FREQS * 10; i++) if (rsd[i] > rsd[best]) best = i;
+    int best = 0;
+    for (int i = 1; i < N_FREQS * 10; i++) if (rsd[i] > rsd[best]) best = i;
 
-        *out_f = BAND_HZ[best / 10];
+    *out_f = BAND_HZ[best / 10];
 
-        // A little jitter around the mean, so a run does not keep landing on
-        // exactly one level and leave the slope between boundaries unsampled.
-        float lev = rmu[best] + (((float)(rand() % 101) / 100.0f) - 0.5f) * 5.0f;
-        if (lev < min_L) lev = min_L;
-        if (lev > max_L) lev = max_L;
-        *out_l = 5.0f * floorf(lev / 5.0f + 0.5f);
-    }
+    // A little jitter around the mean, so a run does not keep landing on
+    // exactly one level and leave the slope between boundaries unsampled.
+    float lev = rmu[best] + (((float)(rand() % 101) / 100.0f) - 0.5f) * 5.0f;
+    if (lev < min_L) lev = min_L;
+    if (lev > max_L) lev = max_L;
+    *out_l = floorf(lev + 0.5f);
+}
+
+void qcls_select_isophon_next(float min_L, float max_L, float* out_f, float* out_l) {
+    if (!qcls_par_ready) init_bayesian_state();
+
+    static float rmu[N_FREQS * 10];
+    int band = rand() % N_FREQS;
+    const int boundary_idxs[4] = {1, 3, 5, 7};
+    int boundary = boundary_idxs[rand() % 4];
+
+    qcls_report(rmu, NULL, NULL);
+    *out_f = BAND_HZ[band];
+
+    float lev = rmu[band * 10 + boundary];
+    if (!isfinite(lev)) lev = (min_L + max_L) / 2.0f;
+    if (lev < min_L) lev = min_L;
+    if (lev > max_L) lev = max_L;
+    *out_l = floorf(lev + 0.5f);
 }
 
 void generate_stimulus(float duration, float samplingRate, int stimulusType, float bandwidthOctaves, float centerFreq, float* outputBuffer) {
@@ -712,292 +886,4 @@ void generate_stimulus(float duration, float samplingRate, int stimulusType, flo
     }
 }
 
-// --- MLE MCPF ESTIMATION ---
-static float mle_history_f[1000];
-static float mle_history_l[1000];
-static int mle_history_r[1000];
-static int mle_num_trials = 0;
-float global_estimated_theta[PCA_PARAMS];
-
-void reconstruct_theta(float* w, float* theta_out) {
-    for (int i = 0; i < PCA_PARAMS; i++) {
-        theta_out[i] = pca_mu[i];
-        for (int c = 0; c < PCA_COMPONENTS; c++) {
-            theta_out[i] += pca_V[i * PCA_COMPONENTS + c] * w[c];
-        }
-    }
-    // Clamp FAR parameters (200 to 209)
-    for (int i = 200; i < 210; i++) {
-        if (theta_out[i] < 0.001f) theta_out[i] = 0.001f;
-        if (theta_out[i] > 0.999f) theta_out[i] = 0.999f;
-    }
-}
-
-int freq_hz_to_idx(float f_hz) {
-    float frq_list[10] = {250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 8000};
-    int best_idx = 0;
-    float min_diff = 100000.0f;
-    for (int i=0; i<10; i++) {
-        float diff = fabsf(frq_list[i] - f_hz);
-        if (diff < min_diff) {
-            min_diff = diff;
-            best_idx = i;
-        }
-    }
-    return best_idx;
-}
-
-float compute_mcpf_nll(float* w) {
-    float theta[PCA_PARAMS];
-    reconstruct_theta(w, theta);
-    
-    float nll = 0.0f;
-    
-    for (int t = 0; t < mle_num_trials; t++) {
-        int f_idx = freq_hz_to_idx(mle_history_f[t]);
-        float spl = mle_history_l[t];
-        int r_idx = (mle_history_r[t] / 5) + 1; // 0->1, 50->11
-        if (r_idx < 1) r_idx = 1;
-        if (r_idx > 11) r_idx = 11;
-        
-        float far = theta[200 + f_idx];
-        float* pa = &theta[f_idx * 20]; 
-        
-        float cb[10] = {0};
-        float md[10] = {0};
-        float sum_md = 0;
-        for (int k = 0; k < 10; k++) {
-            sum_md += pa[10 + k];
-            md[k] = sum_md;
-        }
-        
-        float dfa = far / 11.0f;
-        for (int k = 0; k < 10; k++) {
-            float cf1 = -md[k] * pa[k];
-            float cf2 = pa[k];
-            float pf = 1.0f / (1.0f + expf(-(cf1 + cf2 * spl)));
-            cb[k] = pf * (1.0f - far) + (float)(k + 1) * dfa;
-        }
-        
-        // Eliminate cross-overs
-        for (int it = 0; it < 20; it++) {
-            for (int j = 0; j < 9; j++) {
-                float pd = cb[j+1] - cb[j];
-                if (pd < (dfa / 2.0f)) {
-                    cb[j] = cb[j] + pd/2.0f - dfa/2.0f;
-                    cb[j+1] = cb[j] + dfa;
-                }
-            }
-        }
-        
-        // Top-down
-        float cbmx = 1.0f - dfa;
-        for (int j = 9; j >= 0; j--) {
-            if (cb[j] > cbmx) cb[j] = cbmx;
-            cbmx = cb[j] - dfa;
-        }
-        
-        // Bottom-up
-        float cbmn = dfa;
-        for (int j = 0; j < 10; j++) {
-            if (cb[j] < cbmn) cb[j] = cbmn;
-            cbmn = cb[j] + dfa;
-        }
-        
-        // Convert to category probabilities
-        float pcat[11];
-        pcat[0] = cb[0]; 
-        for (int k=1; k<10; k++) {
-            pcat[k] = cb[k] - cb[k-1];
-        }
-        pcat[10] = 1.0f - cb[9];
-        
-        float sum_pcat = 0;
-        for (int k=0; k<11; k++) {
-            if (pcat[k] < 1e-6f) pcat[k] = 1e-6f;
-            sum_pcat += pcat[k];
-        }
-        
-        float prob_response = pcat[r_idx - 1] / sum_pcat;
-        nll -= logf(prob_response);
-    }
-    return nll;
-}
-
-void run_nelder_mead(float* w_opt) {
-    int N = PCA_COMPONENTS;
-    float simplex[11][10];
-    float f_val[11];
-    
-    // Initialize simplex
-    for(int i=0; i<N+1; i++) {
-        for(int j=0; j<N; j++) {
-            if (i == 0) simplex[i][j] = 0.0f; // origin
-            else {
-                simplex[i][j] = (i - 1 == j) ? 0.5f : 0.0f; // step size 0.5
-            }
-        }
-        f_val[i] = compute_mcpf_nll(simplex[i]);
-    }
-    
-    int max_iters = 1000;
-    float alpha = 1.0f, gamma = 2.0f, rho = 0.5f, sigma = 0.5f;
-    
-    for(int iter = 0; iter < max_iters; iter++) {
-        int best = 0, worst = 0, second_worst = 0;
-        for(int i=1; i<N+1; i++) {
-            if(f_val[i] < f_val[best]) best = i;
-            if(f_val[i] > f_val[worst]) worst = i;
-        }
-        for(int i=0; i<N+1; i++) {
-            if(i != worst && (i == best || f_val[i] > f_val[second_worst])) {
-                second_worst = i;
-            }
-        }
-        
-        float centroid[10] = {0};
-        for(int i=0; i<N+1; i++) {
-            if(i != worst) {
-                for(int j=0; j<N; j++) centroid[j] += simplex[i][j];
-            }
-        }
-        for(int j=0; j<N; j++) centroid[j] /= N;
-        
-        float xr[10];
-        for(int j=0; j<N; j++) xr[j] = centroid[j] + alpha * (centroid[j] - simplex[worst][j]);
-        float fr = compute_mcpf_nll(xr);
-        
-        if (fr >= f_val[best] && fr < f_val[second_worst]) {
-            for(int j=0; j<N; j++) simplex[worst][j] = xr[j];
-            f_val[worst] = fr;
-        } else if (fr < f_val[best]) {
-            float xe[10];
-            for(int j=0; j<N; j++) xe[j] = centroid[j] + gamma * (xr[j] - centroid[j]);
-            float fe = compute_mcpf_nll(xe);
-            if (fe < fr) {
-                for(int j=0; j<N; j++) simplex[worst][j] = xe[j];
-                f_val[worst] = fe;
-            } else {
-                for(int j=0; j<N; j++) simplex[worst][j] = xr[j];
-                f_val[worst] = fr;
-            }
-        } else {
-            float xc[10];
-            for(int j=0; j<N; j++) xc[j] = centroid[j] + rho * (simplex[worst][j] - centroid[j]);
-            float fc = compute_mcpf_nll(xc);
-            if (fc < f_val[worst]) {
-                for(int j=0; j<N; j++) simplex[worst][j] = xc[j];
-                f_val[worst] = fc;
-            } else {
-                for(int i=0; i<N+1; i++) {
-                    if (i != best) {
-                        for(int j=0; j<N; j++) {
-                            simplex[i][j] = simplex[best][j] + sigma * (simplex[i][j] - simplex[best][j]);
-                        }
-                        f_val[i] = compute_mcpf_nll(simplex[i]);
-                    }
-                }
-            }
-        }
-        
-        if (fabsf(f_val[worst] - f_val[best]) < 1e-4f) break;
-    }
-    
-    int best = 0;
-    for(int i=1; i<N+1; i++) {
-        if(f_val[i] < f_val[best]) best = i;
-    }
-    for(int j=0; j<N; j++) w_opt[j] = simplex[best][j];
-}
-
-void estimate_mcpf(float* history_f, float* history_l, float* history_r, int num_trials) {
-    mle_num_trials = num_trials;
-    for (int i=0; i<num_trials; i++) {
-        mle_history_f[i] = history_f[i];
-        mle_history_l[i] = history_l[i];
-        mle_history_r[i] = (int)history_r[i];
-    }
-    
-    float w_opt[10] = {0};
-    run_nelder_mead(w_opt);
-    
-    reconstruct_theta(w_opt, global_estimated_theta);
-}
-
-// Mean of the 100 psychometric slopes, in 1/dB. Negative by convention.
-//
-// The stored values are the slopes themselves, not their logs. mcpf_bnd.m
-// returns slp = -exp(logs5 + (logs50-logs5)*u), and the catalog stores that
-// result directly; checked against coeff_tenfrq_v3, the stored coefficients
-// match mcpf_bnd's slopes to 0.00000. They are negative because the
-// psychometric function is written 1/(1+exp(-slp*(lev-md))), which with a
-// negative slope is high below the boundary and low above it.
-//
-// An earlier version of this function exponentiated the mean, on the
-// mistaken reading that a negative value had to be a log. That turned a
-// correct slope into a meaningless positive number. Do not reintroduce it.
-//
-// This is the steepness of a category boundary, not the rate at which
-// loudness grows, so it is not in CU/dB. The interface reports loudness
-// growth from the CU5 and CU50 contours instead, which is a different
-// quantity and genuinely in CU/dB.
-float get_average_slope() {
-    float sum_slope = 0;
-    for (int i=0; i<10; i++) {
-        for (int k=0; k<10; k++) {
-            sum_slope += global_estimated_theta[i*20 + k];
-        }
-    }
-    return sum_slope / 100.0f;
-}
-
-// Mean of the fitted false-alarm rates.
-//
-// This cannot serve as a per-listener measure and should not be displayed as
-// one. The rate is read off the PCA projection rather than the data, and all
-// ten of its parameters carry the identical loading of 0.00131, so a
-// two-sigma excursion on every component moves the result only from 0.086 to
-// 0.096. Listeners in the CLS2023 catalog span 0.005 to 0.270 with a
-// between-listener SD of 0.037, and the parameter was fit as a single value
-// per listener, invariant across frequency, which is why the ten slots move
-// together. The interface measures the rate from the trials instead.
-float get_average_far() {
-    float sum_far = 0;
-    for (int i=200; i<210; i++) {
-        sum_far += global_estimated_theta[i];
-    }
-    return sum_far / 10.0f;
-}
-
-void get_loudness_boundaries(float freq, float* out_boundaries) {
-    float frq_list[10] = {250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000, 8000};
-    int lower_idx = 0, upper_idx = 0;
-    
-    if (freq <= frq_list[0]) { lower_idx = 0; upper_idx = 0; }
-    else if (freq >= frq_list[9]) { lower_idx = 9; upper_idx = 9; }
-    else {
-        for (int i=0; i<9; i++) {
-            if (freq >= frq_list[i] && freq <= frq_list[i+1]) {
-                lower_idx = i;
-                upper_idx = i+1;
-                break;
-            }
-        }
-    }
-    
-    float t = 0.0f;
-    if (upper_idx != lower_idx) {
-        t = (log10f(freq) - log10f(frq_list[lower_idx])) / (log10f(frq_list[upper_idx]) - log10f(frq_list[lower_idx]));
-    }
-    
-    float* pa_lower = &global_estimated_theta[lower_idx * 20];
-    float* pa_upper = &global_estimated_theta[upper_idx * 20];
-    
-    float sum_lower = 0, sum_upper = 0;
-    for (int k = 0; k < 10; k++) {
-        sum_lower += pa_lower[10 + k];
-        sum_upper += pa_upper[10 + k];
-        out_boundaries[k] = sum_lower + t * (sum_upper - sum_lower);
-    }
-}
 
