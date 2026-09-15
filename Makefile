@@ -10,3 +10,15 @@ qcls_core.js: qcls_core.c index.html
 
 clean:
 	rm -f qcls_core.js qcls_core.wasm
+
+em :
+	@echo source ~/emsdk/emsdk_env.sh
+
+deploy:
+	@if [ -z "$$FTP_CREDS" ]; then \
+		echo "Error: FTP_CREDS environment variable is not set. Use: FTP_CREDS='user:pass' make deploy"; \
+		exit 1; \
+	fi
+	for f in qcls_core.js qcls_core.wasm index.html guide.html; do \
+		curl -T $$f "ftp://$$FTP_CREDS@bonkachen.com/qCLS/$$f"; \
+	done
