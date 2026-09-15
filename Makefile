@@ -10,3 +10,11 @@ qcls_core.js: qcls_core.c index.html
 
 clean:
 	rm -f qcls_core.js qcls_core.wasm
+
+em :
+	@echo source ~/emsdk/emsdk_env.sh
+
+deploy:
+	for f in qcls_core.js qcls_core.wasm index.html guide.html; do \
+		curl -T $$f "ftp://audres_deploy%40bonkachen.com:BTNRH1982%21@bonkachen.com/qCLS/$$f"; \
+	done

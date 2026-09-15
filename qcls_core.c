@@ -159,7 +159,7 @@ void init_bayesian_state() {
     global_qcls_state.par.Ncategories = N_CATEGORIES;
     global_qcls_state.par.Nfreqs = N_FREQS;
     global_qcls_state.par.kfreqs = K_FREQS;
-    global_qcls_state.par.beta = 0.5f;
+    global_qcls_state.par.beta = 0.4788f;
     global_qcls_state.par.lambda = 0.1f;
     
     for (int i = 0; i < N_FREQS; i++) {
@@ -182,7 +182,7 @@ void init_bayesian_state() {
     global_qcls_state.par.Lclearance = 0.1f;
     global_qcls_state.par.fclearance = 0.1f;
     global_qcls_state.par.likelihood_exp = 0.95f;
-    global_qcls_state.par.diffusion = 0.01f;
+    global_qcls_state.par.diffusion = 0.0079f;
 
     qcls_par_ready = 1;
     qcls_seed_models();
