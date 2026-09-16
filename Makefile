@@ -1,3 +1,5 @@
+-include .env
+
 CC = emcc
 CFLAGS = -O3 -Wall
 EXPORTS = -s EXPORTED_FUNCTIONS="['_generate_stimulus', '_calculate_bap_next', '_get_loudness_boundaries', '_estimate_mcpf', '_get_average_slope', '_get_average_far', '_init_bayesian_state', '_qcls_audiogram_prior', '_qcls_report', '_qcls_set_transducer', '_malloc', '_free']"
@@ -15,10 +17,10 @@ em :
 	@echo source ~/emsdk/emsdk_env.sh
 
 deploy:
-	@if [ -z "$$FTP_CREDS" ]; then \
+	@if [ -z "$(FTP_CREDS)" ]; then \
 		echo "Error: FTP_CREDS environment variable is not set. Use: FTP_CREDS='user:pass' make deploy"; \
 		exit 1; \
 	fi
 	for f in qcls_core.js qcls_core.wasm index.html guide.html; do \
-		curl -T $$f "ftp://$$FTP_CREDS@bonkachen.com/qCLS/$$f"; \
+		curl -T $$f "ftp://$(FTP_CREDS)@bonkachen.com/qCLS/$$f"; \
 	done
