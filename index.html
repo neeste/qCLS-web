@@ -112,8 +112,8 @@
                 <label>Adaptive Tracking</label>
                 <select id="adaptive-tracking">
                     <option value="0">Random</option>
-                    <option value="1" selected>Bayesian</option>
-                    <option value="2">isoPhon</option>
+                    <option value="1">Bayesian</option>
+                    <option value="2" selected>isoPhon</option>
                 </select>
                 <span id="adaptive-mode-help" style="font-size:0.78em; color:#666; display:block; margin-top:4px;">
                     Bayesian picks the most uncertain boundary. isoPhon picks a band, then samples one interim CU 10/20/30/40 boundary.
@@ -838,7 +838,7 @@
             when: new Date().toISOString(),
             id: document.getElementById('participant-id').value,
             ear: document.getElementById('test-ear').value,
-            mode: document.getElementById('adaptive-tracking').value === '1' ? 'Bayesian' : 'Random',
+            mode: ['Random', 'Bayesian', 'isoPhon'][parseInt(document.getElementById('adaptive-tracking').value, 10)],
             history: session.history,
             report: session.report,
             audiogramSPL: session.audiogramSPL || null,
