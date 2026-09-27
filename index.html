@@ -113,7 +113,23 @@
                 <select id="adaptive-tracking">
                     <option value="0">Random</option>
                     <option value="1" selected>Bayesian</option>
+                    <option value="2">isoPhon</option>
                 </select>
+                <span id="adaptive-mode-help" style="font-size:0.78em; color:#666; display:block; margin-top:4px;">
+                    Bayesian picks the most uncertain boundary. isoPhon picks a band, then samples one interim CU 10/20/30/40 boundary.
+                </span>
+            </div>
+
+            <div class="input-group">
+                <label>Total Trials</label>
+                <select id="total-trials">
+                    <option value="50">50</option>
+                    <option value="75">75</option>
+                    <option value="100" selected>100</option>
+                </select>
+                <span style="font-size:0.78em; color:#666; display:block; margin-top:4px;">
+                    Total number of trials across the initial and adaptive phases.
+                </span>
             </div>
 
             <div class="control-group">
@@ -164,14 +180,6 @@
                 <span style="font-size:0.85em; color:#555; display:block; font-weight:bold;">Loudness Growth</span>
                 <strong id="val-slope" style="font-size:1.2em; color:#333;">--</strong>
             </div>
-            <div style="background:#fee; padding:10px; border-radius:5px; text-align:center; flex:1; margin-right:10px;">
-                <span style="font-size:0.85em; color:#555; display:block; font-weight:bold;">False-Alarm Rate (FAR)</span>
-                <strong id="val-far" style="font-size:1.2em; color:#333;">--</strong>
-            </div>
-            <div style="background:#efe; padding:10px; border-radius:5px; text-align:center; flex:1;">
-                <span style="font-size:0.85em; color:#555; display:block; font-weight:bold;">Posterior SD (median)</span>
-                <strong id="val-sd" style="font-size:1.2em; color:#333;">--</strong>
-            </div>
         </div>
         <div id="dl-btn" style="display:none; margin-top:15px; gap:10px;">
             <button onclick="downloadTBT()" style="padding:10px 20px; cursor:pointer; background:#333; color:white; border:none; border-radius:5px; font-weight:bold;">Download trials (TBT)</button>
@@ -202,6 +210,7 @@
 
     let session = {
         p1Trials: 0, p2Trials: 0, 
+        totalTrials: 100,
         phase: 'P1', p1Dir: -1, 
         minL: -10, maxL: 110, ceiling: 110, curL: 50, curF: 1000, startL: 50, startVal: null,
         history: [],
@@ -382,6 +391,7 @@
         session.curF = parseFloat(document.getElementById('center-freq').value) || 1000;
         session.startL = parseFloat(document.getElementById('start-level').value) || 50;
         session.curL = session.startL;
+        session.totalTrials = parseInt(document.getElementById('total-trials').value, 10) || 100;
         session.minL = -10;
         // Operator ceiling. Nothing reaches the listener above this, and the
         // equipment limit still caps it. maxL is the working ceiling, which
@@ -410,9 +420,11 @@
         document.getElementById('start-level').disabled = true;
         document.getElementById('max-output').disabled = true;
         document.getElementById('adaptive-tracking').disabled = true;
+        document.getElementById('total-trials').disabled = true;
         
         document.getElementById('progress-container').style.display = 'flex';
-        document.getElementById('test-progress').max = 15;
+        document.getElementById('test-progress').max = session.totalTrials;
+        document.getElementById('test-progress').value = 0;
         document.getElementById('prog-text').innerText = `Initial Phase: Trial 1`;
         document.getElementById('status').innerText = "Status: Testing..." +
             (session.nThresholds
@@ -483,12 +495,16 @@
     function handleResponse(val) {
         document.querySelectorAll('.category-btn').forEach(b => b.disabled = true);
         session.history.push({ f: session.curF, l: session.curL, r: val, p: session.phase });
+
+        // Update all 21 candidate models once with this trial. The C state is
+        // incremental, so the next stimulus never needs the full history.
+        Module._qcls_update_trial(session.curF, session.curL, val);
         
         if (session.phase === 'P1') session.p1Trials++;
         else session.p2Trials++;
 
-        // End Condition
-        if (session.phase === 'P2' && session.p2Trials >= 100) { finishTest(); return; }
+        // End condition: the selected count includes both phases.
+        if (session.history.length >= session.totalTrials) { finishTest(); return; }
 
         updateAdaptiveLogic(val);
 
@@ -496,13 +512,13 @@
         const progText = document.getElementById('prog-text');
 
         if (session.phase === 'P1') {
-            progBar.removeAttribute('max'); // Indeterminate size for phase 1
+            progBar.max = session.totalTrials;
             progBar.value = session.p1Trials;
-            progText.innerText = `Initial Phase: Trial ${session.p1Trials + 1}`;
+            progText.innerText = `Initial Phase: Trial ${session.history.length + 1} of ${session.totalTrials}`;
         } else {
-            progBar.max = 100;
-            progBar.value = session.p2Trials;
-            progText.innerText = `Trial ${session.p2Trials + 1} of 100`;
+            progBar.max = session.totalTrials;
+            progBar.value = session.history.length;
+            progText.innerText = `Trial ${session.history.length + 1} of ${session.totalTrials}`;
         }
 
         setTimeout(playStimulus, 500);
@@ -570,8 +586,10 @@
         const mode = parseInt(document.getElementById('adaptive-tracking').value);
         if (mode === 0) {
             setupPhase2TrialRandom();
-        } else {
+        } else if (mode === 1) {
             setupPhase2TrialBayesian();
+        } else {
+            setupPhase2TrialIsoPhon();
         }
     }
 
@@ -587,43 +605,34 @@
         if (Math.random() > 0.15) {
             let range = session.maxL - session.minL - 1;
             if (range < 0) range = 0; 
-            session.curL = session.minL + Math.random() * range;
+            session.curL = Math.round(session.minL + Math.random() * range);
         } else {
-            session.curL = session.minL - (Math.random() * 10);
+            session.curL = Math.round(session.minL - (Math.random() * 10));
         }
     }
 
     function setupPhase2TrialBayesian() {
-        const numTrials = session.history.length;
-        const bytesPerFloat = 4;
+        const ptrOutF = Module._malloc(4);
+        const ptrOutL = Module._malloc(4);
 
-        const ptrF = Module._malloc(numTrials * bytesPerFloat);
-        const ptrL = Module._malloc(numTrials * bytesPerFloat);
-        const ptrR = Module._malloc(numTrials * bytesPerFloat);
-        const ptrOutF = Module._malloc(bytesPerFloat);
-        const ptrOutL = Module._malloc(bytesPerFloat);
-
-        const viewF = new Float32Array(Module.HEAPF32.buffer, ptrF, numTrials);
-        const viewL = new Float32Array(Module.HEAPF32.buffer, ptrL, numTrials);
-        const viewR = new Float32Array(Module.HEAPF32.buffer, ptrR, numTrials);
-
-        for (let i = 0; i < numTrials; i++) {
-            viewF[i] = session.history[i].f;
-            viewL[i] = session.history[i].l;
-            viewR[i] = session.history[i].r;
-        }
-
-        Module._calculate_bap_next(
-            ptrF, ptrL, ptrR, numTrials, session.p1Trials, 
-            session.minL, session.maxL, ptrOutF, ptrOutL
-        );
+        Module._qcls_select_bayesian_next(session.minL, session.maxL, ptrOutF, ptrOutL);
 
         session.curF = new Float32Array(Module.HEAPF32.buffer, ptrOutF, 1)[0];
         session.curL = new Float32Array(Module.HEAPF32.buffer, ptrOutL, 1)[0];
 
-        Module._free(ptrF);
-        Module._free(ptrL);
-        Module._free(ptrR);
+        Module._free(ptrOutF);
+        Module._free(ptrOutL);
+    }
+
+    function setupPhase2TrialIsoPhon() {
+        const ptrOutF = Module._malloc(4);
+        const ptrOutL = Module._malloc(4);
+
+        Module._qcls_select_isophon_next(session.minL, session.maxL, ptrOutF, ptrOutL);
+
+        session.curF = new Float32Array(Module.HEAPF32.buffer, ptrOutF, 1)[0];
+        session.curL = new Float32Array(Module.HEAPF32.buffer, ptrOutL, 1)[0];
+
         Module._free(ptrOutF);
         Module._free(ptrOutL);
     }
@@ -655,26 +664,20 @@
             // read its mixture estimate. calculate_bap_next reseeds from the
             // prior and replays every trial, so afterwards the posterior
             // holds the whole run; the stimulus it proposes is discarded.
-            const ptrNF = Module._malloc(4);
-            const ptrNL = Module._malloc(4);
-            const ptrMu = Module._malloc(90 * 4);
-            const ptrSd = Module._malloc(90 * 4);
+            const ptrMu = Module._malloc(100 * 4);
 
-            // Replay only, to bring the posterior current; the stimulus it
-            // proposes is discarded. Bounded by the session ceiling anyway.
-            Module._calculate_bap_next(ptrF, ptrL, ptrR, numTrials, 0, 0, session.ceiling, ptrNF, ptrNL);
-            Module._qcls_report(ptrMu, ptrSd, 0);
+            // The Bayesian engine is used for live stimulus selection only.
+            // The final report uses only the PCA post-hoc fitted boundaries.
+            Module._qcls_pca_fit_report(ptrF, ptrL, ptrR, numTrials, ptrMu);
 
-            // 9 bands x 10 boundaries, frequency-major: index = band*10 + b
+            // 10 frequency slots x 10 boundaries; the browser keeps the
+            // 9-band contour plot focused on 250..6000 Hz and ignores the 8 kHz
+            // slot that is not among the live BAP bands.
             session.report = {
-                mu: Array.from(new Float32Array(Module.HEAPF32.buffer, ptrMu, 90)),
-                sd: Array.from(new Float32Array(Module.HEAPF32.buffer, ptrSd, 90))
+                mu: Array.from(new Float32Array(Module.HEAPF32.buffer, ptrMu, 100))
             };
 
-            Module._free(ptrNF);
-            Module._free(ptrNL);
             Module._free(ptrMu);
-            Module._free(ptrSd);
             Module._free(ptrF);
             Module._free(ptrL);
             Module._free(ptrR);
@@ -701,35 +704,13 @@
             document.getElementById('val-slope').innerText = growth.length
                 ? (growth.reduce((a, b) => a + b, 0) / growth.length).toFixed(2) + " CU/dB"
                 : "--";
-            // Measured from the trials, with the number it rests on. Shown as
-            // "--" when too few sub-threshold presentations occurred to support
-            // a rate, rather than printing a number that looks like a finding.
-            const far = estimateFAR();
-            document.getElementById('val-far').innerText =
-                (far && far.n >= FAR_MIN_TRIALS)
-                    ? (100 * far.rate).toFixed(1) + "% (n=" + far.n + ")"
-                    : "-- (n=" + (far ? far.n : 0) + ")";
-
-            // The tracker reports uncertainty; the MCPF point estimate cannot.
-            const sds = session.report.sd.slice().sort((a, b) => a - b);
-            document.getElementById('val-sd').innerText =
-                sds[Math.floor(sds.length / 2)].toFixed(1) + " dB";
-
             renderContours();
             saveSession();
         }, 100);
     }
 
     // Equal-loudness contours. Each curve is one category boundary: the level
-    // that elicits CU 5, 10, ... 50 as a function of frequency, which is what
-    // qcls_report returns directly. The shaded band is +/- 1 SD from the model
-    // mixture, so a wide band marks a boundary this run did not pin down.
-    //
-    // This replaces the categorical heatmap. The heatmap painted a color at
-    // every point of the frequency-by-level plane, which reads as a dense
-    // measurement even where nothing was measured and offered no way to show
-    // uncertainty. Contours show the estimate, its uncertainty, and the nine
-    // bands it is actually supported by.
+    // that elicits CU 5, 10, ... 50 as a function of frequency.
     function renderContours() {
         const canvas = document.getElementById('heatmap');
         const ctx = canvas.getContext('2d');
@@ -757,22 +738,9 @@
         ctx.save();
         ctx.beginPath(); ctx.rect(padL, padT, plotW, plotH); ctx.clip();
 
-        // Loudest first, so the quiet contours draw over the wide bands above.
         for (let b = 9; b >= 0; b--) {
             const mu = AUDIO_BANDS.map((f, i) => session.report.mu[i * 10 + b]);
-            const sd = AUDIO_BANDS.map((f, i) => session.report.sd[i * 10 + b]);
             const col = colors[b + 1];
-
-            ctx.fillStyle = col + "2b";
-            ctx.beginPath();
-            AUDIO_BANDS.forEach((f, i) => {
-                const x = xOf(f), y = yOf(mu[i] + sd[i]);
-                i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
-            });
-            for (let i = AUDIO_BANDS.length - 1; i >= 0; i--) {
-                ctx.lineTo(xOf(AUDIO_BANDS[i]), yOf(mu[i] - sd[i]));
-            }
-            ctx.closePath(); ctx.fill();
 
             ctx.strokeStyle = col; ctx.lineWidth = 2;
             ctx.beginPath();
@@ -851,65 +819,6 @@
         ctx.fillText("stimulus level (dB SPL)", 0, 0);
         ctx.restore();
     }
-    // CU5 at an arbitrary frequency, interpolated along the contour in log
-    // frequency the same way the tracker interpolates between bands.
-    function cu5At(fHz) {
-        const B = AUDIO_BANDS, mu = session.report.mu;
-        if (fHz <= B[0]) return mu[0];
-        if (fHz >= B[B.length - 1]) return mu[(B.length - 1) * 10];
-        for (let i = 0; i < B.length - 1; i++) {
-            if (fHz <= B[i + 1]) {
-                const t = (Math.log(fHz) - Math.log(B[i])) /
-                          (Math.log(B[i + 1]) - Math.log(B[i]));
-                return mu[i * 10] + t * (mu[(i + 1) * 10] - mu[i * 10]);
-            }
-        }
-        return mu[(B.length - 1) * 10];
-    }
-
-    // False-alarm rate measured from the trials: the proportion of clearly
-    // sub-threshold presentations that still drew a response above "can't
-    // hear". A listener who is guessing or inattentive produces them; an
-    // attentive one does not.
-    //
-    // This replaces get_average_far, which read the rate off the PCA
-    // projection rather than the data. All ten of its parameters carry the
-    // same loading of 0.00131, so a two-sigma excursion on every component
-    // moves it only from 0.086 to 0.096, while real listeners in the CLS2023
-    // catalog span 0.005 to 0.270 with a between-listener SD of 0.037. The
-    // displayed number was a constant with rounding attached.
-    //
-    // Read it as a screening indicator, not a calibrated rate. It separates
-    // a clean listener from a guessing one, and on simulated listeners it
-    // recovers a true 0.02 as 0.021. At higher rates it is biased, and the
-    // direction of the bias varies with the run: 0.25 came back as 0.28 in
-    // one simulation and 0.20 as 0.147 in another. Part of the reason is
-    // circular, in that false alarms drag the CU5 estimate down and CU5 is
-    // what defines "sub-threshold" here.
-    //
-    // The count is reported alongside the rate because it is not always large
-    // enough to support one. Posterior-driven selection concentrates trials
-    // near boundaries and leaves few sub-threshold: the random arm yields
-    // about 40 qualifying trials, the Bayesian arm 4 to 10.
-    //
-    // Deliberate catch trials, presented well below threshold, would fix both
-    // problems at once. They would guarantee the count regardless of the
-    // selection rule and give a reference that does not move with the
-    // responses being measured.
-    const FAR_MARGIN_DB = 5;
-    const FAR_MIN_TRIALS = 8;
-
-    function estimateFAR() {
-        if (!session.report || !session.history || !session.history.length) return null;
-        let n = 0, fa = 0;
-        session.history.forEach((t) => {
-            const cu5 = cu5At(t.f);
-            if (!isFinite(cu5)) return;
-            if (t.l < cu5 - FAR_MARGIN_DB) { n++; if (t.r > 0) fa++; }
-        });
-        return { rate: n ? fa / n : null, n: n };
-    }
-
     // Completed sessions previously lived only in a page variable and were
     // lost on reload, so a test that was not downloaded straight away was
     // gone. They are kept in localStorage instead. This is per browser and
@@ -933,11 +842,7 @@
             history: session.history,
             report: session.report,
             audiogramSPL: session.audiogramSPL || null,
-            metrics: {
-                growth: document.getElementById('val-slope').innerText,
-                far: document.getElementById('val-far').innerText,
-                sd: document.getElementById('val-sd').innerText
-            }
+            metrics: { growth: document.getElementById('val-slope').innerText }
         };
         const all = loadStore();
         all.unshift(rec);
@@ -976,25 +881,20 @@
         document.getElementById('dl-btn').style.display = 'flex';
         document.getElementById('metrics-container').style.display = 'flex';
         document.getElementById('val-slope').innerText = r.metrics.growth;
-        document.getElementById('val-far').innerText = r.metrics.far;
-        document.getElementById('val-sd').innerText = r.metrics.sd;
         document.getElementById('status').innerText =
             "Status: Loaded " + r.when.slice(0, 16).replace('T', ' ') + " (" + r.mode + ")";
         renderContours();
     }
 
     // Equal-loudness contours: the result of the test rather than its raw
-    // input. One row per band and category boundary, carrying the mixture
-    // mean and its standard deviation. Without this the estimate exists only
-    // as pixels and anyone analyzing a session has to re-derive it.
+    // input. One row per band and category boundary.
     function downloadELC() {
         if (!session.report) return;
-        let csv = "Band,Freq_Hz,CU,Level_dB_SPL,SD_dB\n";
+        let csv = "Band,Freq_Hz,CU,Level_dB_SPL\n";
         AUDIO_BANDS.forEach((f, i) => {
             for (let b = 0; b < 10; b++) {
                 csv += `${i + 1},${f},${(b + 1) * 5},` +
-                       `${session.report.mu[i * 10 + b].toFixed(2)},` +
-                       `${session.report.sd[i * 10 + b].toFixed(2)}\n`;
+                       `${session.report.mu[i * 10 + b].toFixed(2)}\n`;
             }
         });
         saveCSV(csv, "ELC");
