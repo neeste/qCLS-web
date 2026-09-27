@@ -170,11 +170,14 @@ lost reload, not a lost laptop. The CSV downloads remain the way results leave
 the application.
 
 ## 10. Headless Simulation and Evaluation
-The `sim/qcls_wasm_accuracy_sim.py` harness evaluates the compiled qCLS
-WebAssembly implementation against simulated virtual listeners. It uses the
-same C tracker and post-hoc PCA fitter as the webapp, while
-`sim/wasm_runner.py` mirrors the session and adaptive-stimulus logic and
-`sim/wasm_bridge.js` calls the Emscripten exports under Node.js.
+The `sim/qcls_wasm_accuracy_sim.py` harness evaluates the qCLS WebAssembly
+implementation used by the webapp against simulated virtual listeners. It
+uses the same C tracker, session logic, and post-hoc PCA fitter, including the
+exact trained PCA model compiled from `pca_model.h`. This is the appropriate
+harness for measuring the shipped webapp implementation; it does not retrain
+or replace that PCA model. `sim/wasm_runner.py` mirrors the session and
+adaptive-stimulus logic, and `sim/wasm_bridge.js` calls the Emscripten exports
+under Node.js.
 
 Virtual-listener parameters and ground-truth CU 5 through CU 50 profiles are
 stored in `sim/mcpf_parameters.csv`. `sim/mcpf_simulator.py` uses the MCPF
@@ -190,7 +193,7 @@ repository root, run one mode with:
 
 ```bash
 python sim/qcls_wasm_accuracy_sim.py --impl wasm --mode bayesian \
-  --n_trials 60 --n_reps 20 --out_dir ./wasm_accuracy_results
+  --n_trials 60 --n_reps 20
 ```
 
 Use `--mode random`, `--mode bayesian`, or `--mode isophon` to select the
@@ -206,7 +209,39 @@ reliability, signed bias by listener/boundary/frequency, and a summary JSON
 file. A convergence sweep writes its own table of mean, standard deviation,
 and median MAE by trial count. These describe the procedure's numerical
 contour recovery and repeatability for the supplied virtual-listener model;
-they are not results from human participants.
+they are not results from human participants. By default, files are written
+under `sim/wasm_accuracy_results/`; `--out_dir` can override this location.
+
+### Leave-One-Listener-Out PCA Evaluation
+`sim/qcls_wasm_sim_LOOCV.py` answers a different question: how does an updated
+MCPF dataset and the PCA model trained from it perform on listeners excluded
+from that model's training? For each listener in the supplied CSV, the script
+trains a five-component PCA model from the other listeners' CU boundary
+profiles, installs those fold-specific parameters in the WASM post-hoc fitter,
+and evaluates simulated sessions for the held-out listener. The held-out
+listener's profile is used as evaluation truth and its MCPF coefficients are
+used to simulate responses; neither is included in that fold's PCA training.
+
+This is an experimental evaluation of a new cohort and its corresponding
+updated PCA model. It is not a run of the shipped webapp model: the fold models
+are loaded at runtime by the simulation bridge, and `pca_model.h` is left
+unchanged. Rebuild the WebAssembly module first so it exports the runtime PCA
+setter, then run from the repository root:
+
+```bash
+make
+python sim/qcls_wasm_sim_LOOCV.py --mode isophon \
+  --n_trials 60 --n_reps 20
+```
+
+The default mode is `isophon`; `--mode random` and `--mode bayesian` are also
+available. Each listener is held out in turn, so the full run evaluates every
+participant and can take substantially longer than the fixed-model harness.
+Use `--ground_truth_csv` to provide another compatible MCPF parameter/profile
+CSV. By default, accuracy, pairwise reliability, signed-bias tables, and a
+summary JSON are written under `sim/loocv_results/`; `--out_dir` can override
+the destination. At least two repetitions are required for test-retest
+reliability.
 
 ### Evaluation Scope
 The headless evaluation covers the numerical path from simulated categorical

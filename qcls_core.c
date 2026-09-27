@@ -153,15 +153,52 @@ void CLS_jacobian(qCLS_State* qcls, float freq, float lev, float* kfreqs, float*
 void calc_alpha(qCLS_State* qcls, float freq, float* kfreqs, float* phi, float* alpha_out);
 float interpolate_pchip(float* x, float* y, int n, float xq);
 
+static float qcls_pca_custom_mu[PCA_PARAMS];
+static float qcls_pca_custom_d[PCA_PARAMS];
+static float qcls_pca_custom_V[PCA_PARAMS * PCA_COMPONENTS];
+static float qcls_pca_custom_score_mean[PCA_COMPONENTS];
+static float qcls_pca_custom_score_std[PCA_COMPONENTS];
+static int qcls_pca_custom_model_ready = 0;
+
+int qcls_pca_set_model(const float* mu, const float* d, const float* V,
+                       const float* score_mean, const float* score_std) {
+    if (!mu || !d || !V || !score_mean || !score_std) return 0;
+    for (int i = 0; i < PCA_PARAMS; i++) {
+        if (!isfinite(mu[i]) || !isfinite(d[i]) || d[i] <= 0.0f) return 0;
+    }
+    for (int i = 0; i < PCA_PARAMS * PCA_COMPONENTS; i++) {
+        if (!isfinite(V[i])) return 0;
+    }
+    for (int i = 0; i < PCA_COMPONENTS; i++) {
+        if (!isfinite(score_mean[i]) || !isfinite(score_std[i]) || score_std[i] <= 0.0f) return 0;
+    }
+
+    memcpy(qcls_pca_custom_mu, mu, sizeof(qcls_pca_custom_mu));
+    memcpy(qcls_pca_custom_d, d, sizeof(qcls_pca_custom_d));
+    memcpy(qcls_pca_custom_V, V, sizeof(qcls_pca_custom_V));
+    memcpy(qcls_pca_custom_score_mean, score_mean, sizeof(qcls_pca_custom_score_mean));
+    memcpy(qcls_pca_custom_score_std, score_std, sizeof(qcls_pca_custom_score_std));
+    qcls_pca_custom_model_ready = 1;
+    return 1;
+}
+
 static void qcls_pca_init_model(qCLS_PCA_Model* model) {
     if (!model) return;
     *model = qcls_pca_model_default;
-    memcpy(model->mu, pca_mu, sizeof(pca_mu));
-    memcpy(model->d, pca_d, sizeof(pca_d));
-    memcpy(model->V, pca_V, sizeof(pca_V));
-    for (int i = 0; i < PCA_COMPONENTS; i++) {
-        model->score_mean[i] = pca_score_mean[i];
-        model->score_std[i]  = pca_score_std[i];
+    if (qcls_pca_custom_model_ready) {
+        memcpy(model->mu, qcls_pca_custom_mu, sizeof(model->mu));
+        memcpy(model->d, qcls_pca_custom_d, sizeof(model->d));
+        memcpy(model->V, qcls_pca_custom_V, sizeof(model->V));
+        memcpy(model->score_mean, qcls_pca_custom_score_mean, sizeof(model->score_mean));
+        memcpy(model->score_std, qcls_pca_custom_score_std, sizeof(model->score_std));
+    } else {
+        memcpy(model->mu, pca_mu, sizeof(pca_mu));
+        memcpy(model->d, pca_d, sizeof(pca_d));
+        memcpy(model->V, pca_V, sizeof(pca_V));
+        for (int i = 0; i < PCA_COMPONENTS; i++) {
+            model->score_mean[i] = pca_score_mean[i];
+            model->score_std[i]  = pca_score_std[i];
+        }
     }
 }
 

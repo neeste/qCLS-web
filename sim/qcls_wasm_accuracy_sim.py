@@ -533,7 +533,10 @@ def main():
     p.add_argument("--plot_repetitions", action="store_true",
                    help="Plot truth and fitted boundaries after each repetition; press a key to continue")
     p.add_argument("--base_seed", type=int, default=0)
-    p.add_argument("--out_dir", default="./wasm_accuracy_results")
+    p.add_argument(
+        "--out_dir", type=Path,
+        default=Path(__file__).resolve().with_name("wasm_accuracy_results"),
+    )
     args = p.parse_args()
 
     out_dir = Path(args.out_dir)

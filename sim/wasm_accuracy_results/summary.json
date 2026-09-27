@@ -1,0 +1,13 @@
+{
+  "mode": "isophon",
+  "n_listeners": 148,
+  "n_trials": 100,
+  "n_reps": 2,
+  "accuracy_mean_mae_db": 5.461337117952772,
+  "accuracy_sd_mae_db": 1.942033608038222,
+  "accuracy_median_mae_db": 5.04449235868608,
+  "accuracy_max_mae_db": 18.557135187865786,
+  "reliability_mean_mad_db": 3.6823068723163086,
+  "reliability_sd_mad_db": 2.5262302881038763,
+  "reliability_median_mad_db": 2.9329788208007814
+}

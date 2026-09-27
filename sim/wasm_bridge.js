@@ -58,6 +58,32 @@ function runFit(message) {
     }
 }
 
+function installPcaModel(model) {
+    const fields = [
+        ["mu", 100],
+        ["d", 100],
+        ["V", 500],
+        ["score_mean", 5],
+        ["score_std", 5],
+    ];
+    if (!model || fields.some(([name, length]) =>
+        !Array.isArray(model[name]) || model[name].length !== length)) {
+        throw new Error("PCA model must contain arrays sized 100, 100, 500, 5, and 5");
+    }
+
+    const pointers = fields.map(([, length]) => Module._malloc(length * 4));
+    try {
+        fields.forEach(([name], index) => {
+            Module.HEAPF32.set(model[name], pointers[index] / 4);
+        });
+        const ok = Module._qcls_pca_set_model(...pointers);
+        if (!ok) throw new Error("qcls_pca_set_model rejected the supplied parameters");
+        return { ok: true };
+    } finally {
+        pointers.forEach((pointer) => Module._free(pointer));
+    }
+}
+
 async function dispatch(message) {
     await runtimeReady;
     switch (message.cmd) {
@@ -81,6 +107,8 @@ async function dispatch(message) {
             );
         case "fit":
             return { boundaries: runFit(message) };
+        case "set_pca_model":
+            return installPcaModel(message.model);
         default:
             throw new Error(`Unknown bridge command: ${message.cmd}`);
     }

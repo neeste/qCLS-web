@@ -1,0 +1,14 @@
+{
+  "evaluation": "leave-one-listener-out",
+  "mode": "isophon",
+  "n_listeners": 148,
+  "training_listeners_per_fold": 147,
+  "n_trials": 100,
+  "n_reps": 2,
+  "accuracy_mean_mae_db": 5.892341497695642,
+  "accuracy_sd_mae_db": 2.401806676139642,
+  "accuracy_median_mae_db": 5.173232758549167,
+  "reliability_mean_mad_db": 4.044036214996029,
+  "reliability_sd_mad_db": 3.2944110871611896,
+  "reliability_median_mad_db": 2.974726223945618
+}

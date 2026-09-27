@@ -202,7 +202,11 @@ def serve(module_path: Path, node: str) -> int:
             try:
                 message = json.loads(line)
                 command = message.get("cmd")
-                if command == "start":
+                if command == "set_pca_model":
+                    response = bridge.request({
+                        "cmd": "set_pca_model", "model": message["model"]
+                    })
+                elif command == "start":
                     session.start(
                         int(message["seed"]), int(message["mode"]), int(message["n_trials"])
                     )
