@@ -82,14 +82,15 @@ function simulate_response(theta_210, freq_hz, spl) {
 
 qcls.onRuntimeInitialized = () => {
     let total_mae = 0;
-    let n_test = Math.min(10, listeners.length);
+    let total_rmse = 0;
+    let n_test = listeners.length;
 
     let ptrF = qcls._malloc(100 * 4);
     let ptrL = qcls._malloc(100 * 4);
     let ptrR = qcls._malloc(100 * 4);
     let ptrOutF = qcls._malloc(4);
     let ptrOutL = qcls._malloc(4);
-    let ptrBounds = qcls._malloc(10 * 4);
+    let ptrOutMu = qcls._malloc(100 * 4); // 100 boundaries
 
     for(let i=0; i<n_test; i++) {
         let listener = listeners[i];
@@ -103,7 +104,7 @@ qcls.onRuntimeInitialized = () => {
 
         for(let trial=0; trial<100; trial++) {
             // Get next stimulus
-            qcls._calculate_bap_next(ptrF, ptrL, ptrR, trial, 0, 0, 110, ptrOutF, ptrOutL);
+            qcls._qcls_select_bayesian_next(0, 110, ptrOutF, ptrOutL);
             let nextF = new Float32Array(qcls.HEAPF32.buffer, ptrOutF, 1)[0];
             let nextL = new Float32Array(qcls.HEAPF32.buffer, ptrOutL, 1)[0];
 
@@ -114,18 +115,21 @@ qcls.onRuntimeInitialized = () => {
             histF[trial] = nextF;
             histL[trial] = nextL;
             histR[trial] = resp;
+
+            // Update C state
+            qcls._qcls_update_trial(nextF, nextL, resp);
         }
 
         // Run post-hoc MLE fitting
-        qcls._estimate_mcpf(ptrF, ptrL, ptrR, 100);
+        qcls._qcls_pca_fit_report(ptrF, ptrL, ptrR, 100, ptrOutMu);
+        
+        let est_bounds = new Float32Array(qcls.HEAPF32.buffer, ptrOutMu, 100);
 
-        // Get boundaries and compute MAE against truth
+        // Get boundaries and compute MAE/RMSE against truth
         let listener_mae = 0;
+        let listener_mse = 0;
         let count = 0;
         for(let f=0; f<10; f++) {
-            qcls._get_loudness_boundaries(freqs_hz[f], ptrBounds);
-            let est_bounds = new Float32Array(qcls.HEAPF32.buffer, ptrBounds, 10);
-            
             // Reconstruct true md array for this frequency
             let intervals = theta.slice(f * 20 + 10, f * 20 + 20);
             let true_md = new Float32Array(10);
@@ -136,17 +140,24 @@ qcls.onRuntimeInitialized = () => {
             }
             
             for(let k=0; k<10; k++) {
-                let diff = Math.abs(est_bounds[k] - true_md[k]);
+                let est_bound = est_bounds[f * 10 + k];
+                let diff = Math.abs(est_bound - true_md[k]);
                 listener_mae += diff;
+                listener_mse += diff * diff;
                 count++;
             }
         }
         listener_mae /= count;
+        let listener_rmse = Math.sqrt(listener_mse / count);
+        
         total_mae += listener_mae;
+        total_rmse += listener_rmse;
     }
 
-    console.log(`Average RMSE (MAE) at 100 trials: ${(total_mae / n_test).toFixed(2)} dB`);
+    console.log(`Tracking Performance over ${n_test} full listeners (100 trials each):`);
+    console.log(`Average MAE:  ${(total_mae / n_test).toFixed(2)} dB`);
+    console.log(`Average RMSE: ${(total_rmse / n_test).toFixed(2)} dB`);
     
     qcls._free(ptrF); qcls._free(ptrL); qcls._free(ptrR);
-    qcls._free(ptrOutF); qcls._free(ptrOutL); qcls._free(ptrBounds);
+    qcls._free(ptrOutF); qcls._free(ptrOutL); qcls._free(ptrOutMu);
 };
