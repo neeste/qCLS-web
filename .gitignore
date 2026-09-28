@@ -1,1 +1,5 @@
 .env
+sim/*.csv
+sim/*.log
+sim/loocv_results_*/
+sim/__pycache__/
