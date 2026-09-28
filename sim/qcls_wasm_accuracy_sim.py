@@ -298,6 +298,9 @@ class DummyAdapter(ImplementationAdapter):
 # 4. Metrics
 # --------------------------------------------------------------------------
 
+def rmse(fit: np.ndarray, truth: np.ndarray) -> float:
+    return float(np.sqrt(np.mean((fit - truth)**2)))
+
 def mae(fit: np.ndarray, truth: np.ndarray) -> float:
     return float(np.mean(np.abs(fit - truth)))
 

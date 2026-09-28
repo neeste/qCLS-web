@@ -29,6 +29,7 @@ if __package__:
         WasmAdapter,
         mad_between,
         mae,
+        rmse,
         plot_profile_comparison,
     )
     from .train_pca_model import load_profiles, train_model
@@ -39,6 +40,7 @@ else:
         WasmAdapter,
         mad_between,
         mae,
+        rmse,
         plot_profile_comparison,
     )
     from train_pca_model import load_profiles, train_model
@@ -132,6 +134,7 @@ def run_loocv(
                     "rep": repetition,
                     "seed": seed,
                     "mae_db": mae(fit, truth),
+                    "rmse_db": rmse(fit, truth),
                 })
                 if plot_repetitions:
                     plot_profile_comparison(
@@ -228,6 +231,7 @@ def main() -> None:
         "n_trials": args.n_trials,
         "n_reps": args.n_reps,
         "accuracy_mean_mae_db": float(accuracy["mae_db"].mean()),
+        "accuracy_mean_rmse_db": float(accuracy["rmse_db"].mean()),
         "accuracy_sd_mae_db": float(accuracy["mae_db"].std()),
         "accuracy_median_mae_db": float(accuracy["mae_db"].median()),
         "reliability_mean_mad_db": float(reliability["mad_db"].mean()),
