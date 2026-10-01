@@ -279,6 +279,21 @@ static float qcls_pca_loglik(const qCLS_PCA_Model* model, const float* score,
             ll += hit ? logf(p) : logf(1.0f - p);
         }
     }
+    if (qcls_par_ready) {
+        float cb[PCA_PARAMS];
+        qcls_pca_reconstruct_cb(model, score, cb);
+        for (int f = 0; f < N_FREQS; f++) {
+            int b_indices[3] = {0, 4, 9};
+            for (int j = 0; j < 3; j++) {
+                float mu_prior = global_qcls_state.par.phi_prior_mu[f][j];
+                float sd_prior = global_qcls_state.par.phi_prior_std[f][j];
+                float boundary = cb[f * PCA_BOUNDARIES + b_indices[j]];
+                float z = (boundary - mu_prior) / sd_prior;
+                ll -= 0.5f * z * z;
+            }
+        }
+    }
+
     return ll;
 }
 
