@@ -60,7 +60,7 @@ the most uncertain boundary. isoPhon selects a random BAP band and then one of
 the CU 10, 20, 30, or 40 boundary estimates from the same current posterior.
 
 ## 4. Audio Generation & Routing
-Stimulus generation (Pure Tones, SAM-Tones, and Five-Tone Complexes) is calculated sample-by-sample in the C engine to ensure phase accuracy and precise RMS scaling.
+Stimulus generation (Pure Tones, SAM-Tones, and Five-Tone Complexes) is calculated sample-by-sample in the C engine to ensure phase accuracy and precise RMS scaling. The Five-Tone Complex (Schroeder Phase) is the default; it applies the standard Schroeder phase sequence across the five components, intended to reduce envelope fluctuations. The original zero-phase Five-Tone Complex remains available as a separate option.
 When JavaScript requests a stimulus, the C engine writes the raw float data into shared memory. JavaScript reads this data, scales it to the target dB SPL, and feeds it into an `AudioBufferSourceNode`. The audio is then routed through a `StereoPannerNode` (directed by the UI's "Test Ear" dropdown) before reaching the hardware destination.
 
 ## 5. Tracking and Final Results
@@ -187,9 +187,35 @@ presented frequency and level. The Python runner converts categories
 the C tracker. The CSV profiles are the reference truth used for accuracy
 metrics; response probabilities come from the MCPF parameters.
 
-Requirements are Python with NumPy and pandas, Node.js, and the built
-`qcls_core.js` / `qcls_core.wasm` files in the repository root. From the
-repository root, run one mode with:
+### Local development environment
+
+The included conda environment definition is the recommended way to create a
+reproducible compile-and-validation setup:
+
+```bash
+conda env create -p ./.venv -f environment.yml
+```
+
+That environment provides Python, NumPy, pandas, Node.js, and Emscripten so
+you can rebuild the WebAssembly module and run the headless validation
+harness from the repository root.
+
+To compile the WebAssembly module:
+
+```bash
+conda run -p ./.venv make
+```
+
+To validate the shipped webapp logic against the WebAssembly bridge:
+
+```bash
+conda run -p ./.venv python sim/qcls_wasm_accuracy_sim.py --impl wasm \
+  --mode bayesian --n_trials 60 --n_reps 20
+```
+
+Requirements for manual setups are Python with NumPy and pandas, Node.js, and
+the built `qcls_core.js` / `qcls_core.wasm` files in the repository root. From
+the repository root, run one mode with:
 
 ```bash
 python sim/qcls_wasm_accuracy_sim.py --impl wasm --mode bayesian \

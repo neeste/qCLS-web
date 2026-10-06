@@ -98,7 +98,12 @@ int qcls_set_transducer(int which) {
 // band for.
 static const float BAND_HZ[N_FREQS] = {250,500,750,1000,1500,2000,3000,4000,6000};
 
-typedef enum { STIM_TONE = 0, STIM_SAM_TONE, STIM_FIVE_TONE } StimulusType;
+typedef enum {
+    STIM_TONE = 0,
+    STIM_SAM_TONE,
+    STIM_FIVE_TONE,
+    STIM_FIVE_TONE_SCHROEDER
+} StimulusType;
 
 // --- STRUCTS ---
 typedef struct {
@@ -893,7 +898,9 @@ void generate_stimulus(float duration, float samplingRate, int stimulusType, flo
     }
 
     float f1 = centerFreq, f2 = centerFreq, f4 = centerFreq, f5 = centerFreq;
-    if (stimulusType == STIM_FIVE_TONE && bandwidthOctaves > 0.0f) {
+    if ((stimulusType == STIM_FIVE_TONE ||
+         stimulusType == STIM_FIVE_TONE_SCHROEDER) &&
+        bandwidthOctaves > 0.0f) {
         float k = powf(2.0f, bandwidthOctaves / 4.0f); 
         f1 = centerFreq / (k * k);
         f2 = centerFreq / k;
@@ -925,17 +932,24 @@ void generate_stimulus(float duration, float samplingRate, int stimulusType, flo
             float modulator = 1.0f + sinf(2.0f * PI * fm * t);
             val = sam_tone_amp * modulator * carrier;
         }
-        else if (stimulusType == STIM_FIVE_TONE) {
+        else if (stimulusType == STIM_FIVE_TONE ||
+                 stimulusType == STIM_FIVE_TONE_SCHROEDER) {
+            float phase3 = 0.0f;
+            float phase4 = 0.0f;
+            float phase5 = 0.0f;
+            if (stimulusType == STIM_FIVE_TONE_SCHROEDER) {
+                phase3 = -2.0f * PI / 5.0f;
+                phase4 = -6.0f * PI / 5.0f;
+                phase5 = -12.0f * PI / 5.0f;
+            }
             float sum = sinf(2.0f * PI * f1 * t) +
                         sinf(2.0f * PI * f2 * t) +
-                        carrier + 
-                        sinf(2.0f * PI * f4 * t) +
-                        sinf(2.0f * PI * f5 * t);
+                        sinf(2.0f * PI * centerFreq * t + phase3) +
+                        sinf(2.0f * PI * f4 * t + phase4) +
+                        sinf(2.0f * PI * f5 * t + phase5);
             val = five_tone_amp * sum;
         }
 
         outputBuffer[i] = val * window;
     }
 }
-
-

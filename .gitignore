@@ -1,4 +1,9 @@
+.DS_Store
 .env
+.venv/
+.vscode/
+env/
+venv/
 sim/*.csv
 sim/*.log
 sim/loocv_results_*/

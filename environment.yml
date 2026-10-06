@@ -1,0 +1,9 @@
+name: qcls-web
+channels:
+  - conda-forge
+dependencies:
+  - python=3.11
+  - numpy
+  - pandas
+  - nodejs
+  - emscripten=3.1.58
