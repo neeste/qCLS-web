@@ -60,7 +60,24 @@ the most uncertain boundary. isoPhon selects a random BAP band and then one of
 the CU 10, 20, 30, or 40 boundary estimates from the same current posterior.
 
 ## 4. Audio Generation & Routing
-Stimulus generation (Pure Tones, SAM-Tones, and Five-Tone Complexes) is calculated sample-by-sample in the C engine to ensure phase accuracy and precise RMS scaling. The Five-Tone Complex (Schroeder Phase) is the default; it applies the standard Schroeder phase sequence across the five components, intended to reduce envelope fluctuations. The original zero-phase Five-Tone Complex remains available as a separate option.
+Stimulus generation (Pure Tones, SAM-Tones, and Five-Tone Complexes) is calculated sample-by-sample in the C engine to ensure phase accuracy and precise RMS scaling. The Five-Tone Complex (Schroeder-Negative Phase) is the default; it applies the negative Schroeder phase sequence across the five components. This phase pattern is a way to control the complex's peak factor and temporal-envelope cues. Psychoacoustic masking studies show that Schroeder phase affects masked thresholds and the envelope produced by cochlear filtering: negative phase is associated with a flatter internal envelope, while positive phase produces stronger modulation (Kohlrausch & Sander, 1995; Carlyon & Datta, 1997). These findings motivate controlling phase-related cues, but they are not direct evidence that negative phase changes loudness judgments or improves categorical loudness scaling. The original zero-phase Five-Tone Complex remains available as a separate option.
+
+The default stimulus bandwidth is 1/4 octave for SAM-Tones and both Five-Tone Complexes. Pure Tone uses zero bandwidth.
+
+Relevant phase studies:
+
+- Schroeder, M. R. (1970). Synthesis of low-peak-factor signals and binary
+  sequences with low autocorrelation. *IEEE Transactions on Information
+  Theory, 16*(1), 85-89. https://doi.org/10.1109/TIT.1970.1054411
+- Kohlrausch, A., & Sander, A. (1995). Phase effects in masking related to
+  dispersion in the inner ear. II. Masking period patterns of short targets.
+  *The Journal of the Acoustical Society of America, 97*(3), 1817-1829.
+  https://doi.org/10.1121/1.413097
+- Carlyon, R. P., & Datta, A. J. (1997). Excitation produced by Schroeder-phase
+  complexes: Evidence for fast-acting compression in the auditory system.
+  *The Journal of the Acoustical Society of America, 101*(6), 3636-3647.
+  https://doi.org/10.1121/1.418324
+
 When JavaScript requests a stimulus, the C engine writes the raw float data into shared memory. JavaScript reads this data, scales it to the target dB SPL, and feeds it into an `AudioBufferSourceNode`. The audio is then routed through a `StereoPannerNode` (directed by the UI's "Test Ear" dropdown) before reaching the hardware destination.
 
 ## 5. Tracking and Final Results

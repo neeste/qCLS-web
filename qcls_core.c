@@ -102,7 +102,7 @@ typedef enum {
     STIM_TONE = 0,
     STIM_SAM_TONE,
     STIM_FIVE_TONE,
-    STIM_FIVE_TONE_SCHROEDER
+    STIM_FIVE_TONE_SCHROEDER_NEGATIVE
 } StimulusType;
 
 // --- STRUCTS ---
@@ -899,7 +899,7 @@ void generate_stimulus(float duration, float samplingRate, int stimulusType, flo
 
     float f1 = centerFreq, f2 = centerFreq, f4 = centerFreq, f5 = centerFreq;
     if ((stimulusType == STIM_FIVE_TONE ||
-         stimulusType == STIM_FIVE_TONE_SCHROEDER) &&
+         stimulusType == STIM_FIVE_TONE_SCHROEDER_NEGATIVE) &&
         bandwidthOctaves > 0.0f) {
         float k = powf(2.0f, bandwidthOctaves / 4.0f); 
         f1 = centerFreq / (k * k);
@@ -933,11 +933,11 @@ void generate_stimulus(float duration, float samplingRate, int stimulusType, flo
             val = sam_tone_amp * modulator * carrier;
         }
         else if (stimulusType == STIM_FIVE_TONE ||
-                 stimulusType == STIM_FIVE_TONE_SCHROEDER) {
+                 stimulusType == STIM_FIVE_TONE_SCHROEDER_NEGATIVE) {
             float phase3 = 0.0f;
             float phase4 = 0.0f;
             float phase5 = 0.0f;
-            if (stimulusType == STIM_FIVE_TONE_SCHROEDER) {
+            if (stimulusType == STIM_FIVE_TONE_SCHROEDER_NEGATIVE) {
                 phase3 = -2.0f * PI / 5.0f;
                 phase4 = -6.0f * PI / 5.0f;
                 phase5 = -12.0f * PI / 5.0f;
