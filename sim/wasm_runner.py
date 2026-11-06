@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 
 BANDS_HZ = (250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000)
-MODE_CODES = {"random": 0, "bayesian": 1, "isophon": 2}
+MODE_CODES = {"random": 0, "bayesian": 1, "isophon": 2, "gp": 3}
 MAX_OUTPUT_SPL = 110.0
 DISCOMFORT_BACKOFF_DB = 5.0
 BRIDGE_PATH = Path(__file__).with_name("wasm_bridge.js")
@@ -128,7 +128,12 @@ class WebAppSession:
                     self.min_level - self.rng.random() * 10.0 + 0.5
                 )
         else:
-            command = "bayesian" if self.mode == MODE_CODES["bayesian"] else "isophon"
+            if self.mode == MODE_CODES["bayesian"]:
+                command = "bayesian"
+            elif self.mode == MODE_CODES["isophon"]:
+                command = "isophon"
+            else:
+                command = "gp"
             stimulus = self.bridge.request({
                 "cmd": command,
                 "min_level": self.min_level,
@@ -177,12 +182,15 @@ class WebAppSession:
             self.current_level = -10.0
 
     def fitted_boundaries(self) -> list[list[float]]:
-        fit = self.bridge.request({
-            "cmd": "fit",
-            "frequencies": self.history_f,
-            "levels": self.history_l,
-            "responses": self.history_r,
-        })["boundaries"]
+        if self.mode == MODE_CODES["gp"]:
+            fit = self.bridge.request({"cmd": "gp_report"})["boundaries"]
+        else:
+            fit = self.bridge.request({
+                "cmd": "fit",
+                "frequencies": self.history_f,
+                "levels": self.history_l,
+                "responses": self.history_r,
+            })["boundaries"]
         return [
             [float(fit[frequency * 10 + boundary]) for frequency in range(10)]
             for boundary in range(10)

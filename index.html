@@ -115,9 +115,10 @@
                     <option value="0">Random</option>
                     <option value="1">Bayesian</option>
                     <option value="2" selected>isoPhon</option>
+                    <option value="3">Laplace GP</option>
                 </select>
                 <span id="adaptive-mode-help" style="font-size:0.78em; color:#666; display:block; margin-top:4px;">
-                    Bayesian picks the most uncertain boundary. isoPhon picks a band, then samples one interim CU 10/20/30/40 boundary.
+                    Bayesian picks the most uncertain reachable boundary. isoPhon samples interim CU 10/20/30/40 boundaries. Laplace GP maximizes global variance reduction.
                 </span>
             </div>
 
@@ -497,9 +498,9 @@
         document.querySelectorAll('.category-btn').forEach(b => b.disabled = true);
         session.history.push({ f: session.curF, l: session.curL, r: val, p: session.phase });
 
-        // Update all 21 candidate models once with this trial. The C state is
-        // incremental, so the next stimulus never needs the full history.
+        // Update all 21 candidate models and the Laplace GP tracker with this trial.
         Module._qcls_update_trial(session.curF, session.curL, val);
+        Module._qcls_gp_update_trial(session.curF, session.curL, val);
         
         if (session.phase === 'P1') session.p1Trials++;
         else session.p2Trials++;
@@ -589,8 +590,10 @@
             setupPhase2TrialRandom();
         } else if (mode === 1) {
             setupPhase2TrialBayesian();
-        } else {
+        } else if (mode === 2) {
             setupPhase2TrialIsoPhon();
+        } else {
+            setupPhase2TrialGP();
         }
     }
 
@@ -638,6 +641,19 @@
         Module._free(ptrOutL);
     }
 
+    function setupPhase2TrialGP() {
+        const ptrOutF = Module._malloc(4);
+        const ptrOutL = Module._malloc(4);
+
+        Module._qcls_select_gp_next(session.minL, session.maxL, ptrOutF, ptrOutL);
+
+        session.curF = new Float32Array(Module.HEAPF32.buffer, ptrOutF, 1)[0];
+        session.curL = new Float32Array(Module.HEAPF32.buffer, ptrOutL, 1)[0];
+
+        Module._free(ptrOutF);
+        Module._free(ptrOutL);
+    }
+
     function finishTest() {
         document.getElementById('scale-container').style.display = 'none';
         document.getElementById('progress-container').style.display = 'none';
@@ -661,15 +677,16 @@
                 viewR[i] = session.history[i].r;
             }
             
-            // Bring the Bayesian tracker up to date on the same history and
-            // read its mixture estimate. calculate_bap_next reseeds from the
-            // prior and replays every trial, so afterwards the posterior
-            // holds the whole run; the stimulus it proposes is discarded.
             const ptrMu = Module._malloc(100 * 4);
+            const mode = parseInt(document.getElementById('adaptive-tracking').value, 10);
 
-            // The Bayesian engine is used for live stimulus selection only.
-            // The final report uses only the PCA post-hoc fitted boundaries.
-            Module._qcls_pca_fit_report(ptrF, ptrL, ptrR, numTrials, ptrMu);
+            if (mode === 3) {
+                Module._qcls_gp_report(ptrMu, 0);
+            } else {
+                // The Bayesian engine is used for live stimulus selection only.
+                // The final report uses only the PCA post-hoc fitted boundaries.
+                Module._qcls_pca_fit_report(ptrF, ptrL, ptrR, numTrials, ptrMu);
+            }
 
             // 10 frequency slots x 10 boundaries; the browser keeps the
             // 9-band contour plot focused on 250..6000 Hz and ignores the 8 kHz
@@ -839,7 +856,7 @@
             when: new Date().toISOString(),
             id: document.getElementById('participant-id').value,
             ear: document.getElementById('test-ear').value,
-            mode: ['Random', 'Bayesian', 'isoPhon'][parseInt(document.getElementById('adaptive-tracking').value, 10)],
+            mode: ['Random', 'Bayesian', 'isoPhon', 'Laplace GP'][parseInt(document.getElementById('adaptive-tracking').value, 10)],
             history: session.history,
             report: session.report,
             audiogramSPL: session.audiogramSPL || null,

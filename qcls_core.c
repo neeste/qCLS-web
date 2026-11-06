@@ -149,6 +149,7 @@ static int qcls_par_ready = 0;
 
 // --- FORWARD DECLARATIONS ---
 void qcls_seed_models(void);
+static void init_gp_state_internal(void);
 void qcls_audiogram_prior(float* thr, int units_are_hl);
 int  qcls_set_transducer(int which);
 void qcls_report(float* out_mu, float* out_sd, float* out_muMAP);
@@ -445,6 +446,7 @@ void qcls_seed_models(void) {
         }
     }
     global_qcls_state.trial_n = 0;
+    init_gp_state_internal();
 }
 
 // --- MATRIX MATH HELPERS ---
@@ -856,7 +858,16 @@ void qcls_select_bayesian_next(float min_L, float max_L, float* out_f, float* ou
     qcls_report(rmu, rsd, NULL);
 
     int best = 0;
-    for (int i = 1; i < N_FREQS * 10; i++) if (rsd[i] > rsd[best]) best = i;
+    float best_sd = -1.0f;
+    for (int i = 0; i < N_FREQS * 10; i++) {
+        if ((i % 10) < 8 && rmu[i] >= min_L && rmu[i] <= max_L && rsd[i] > best_sd) {
+            best = i;
+            best_sd = rsd[i];
+        }
+    }
+    if (best_sd < 0.0f) {
+        for (int i = 1; i < N_FREQS * 10; i++) if (rsd[i] > rsd[best]) best = i;
+    }
 
     *out_f = BAND_HZ[best / 10];
 
@@ -866,6 +877,303 @@ void qcls_select_bayesian_next(float min_L, float max_L, float* out_f, float* ou
     if (lev < min_L) lev = min_L;
     if (lev > max_L) lev = max_L;
     *out_l = floorf(lev + 0.5f);
+}
+
+// --- UNIFIED LAPLACE GAUSSIAN PROCESS (GP) TRACKER ---
+#define GP_MAX_TRIALS 512
+
+typedef struct {
+    int ready;
+    float beta;
+    float lambda;
+    float mu_0[PCA_PARAMS];
+    float Sigma_0[PCA_PARAMS * PCA_PARAMS];
+    float Prec_0[PCA_PARAMS * PCA_PARAMS];
+    float mu[PCA_PARAMS];
+    float Sigma[PCA_PARAMS * PCA_PARAMS];
+    int num_trials;
+    int hist_f_idx[GP_MAX_TRIALS];
+    float hist_l[GP_MAX_TRIALS];
+    int hist_hits[GP_MAX_TRIALS][10];
+} qCLS_GP_State;
+
+static qCLS_GP_State global_gp_state;
+
+// Solve A * x = b for a 100x100 symmetric positive-definite matrix A using Cholesky L * L^T = A
+static int gp_cholesky_decomp(const float* A, int n, float* L) {
+    for (int i = 0; i < n * n; i++) L[i] = 0.0f;
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j <= i; j++) {
+            float sum = A[i * n + j];
+            for (int k = 0; k < j; k++) {
+                sum -= L[i * n + k] * L[j * n + k];
+            }
+            if (i == j) {
+                if (sum <= 1e-9f) sum = 1e-9f;
+                L[i * n + j] = sqrtf(sum);
+            } else {
+                L[i * n + j] = sum / L[j * n + j];
+            }
+        }
+    }
+    return 1;
+}
+
+static void gp_cholesky_solve_vec(const float* L, int n, const float* b, float* x) {
+    float y[PCA_PARAMS];
+    for (int i = 0; i < n; i++) {
+        float sum = b[i];
+        for (int k = 0; k < i; k++) sum -= L[i * n + k] * y[k];
+        y[i] = sum / L[i * n + i];
+    }
+    for (int i = n - 1; i >= 0; i--) {
+        float sum = y[i];
+        for (int k = i + 1; k < n; k++) sum -= L[k * n + i] * x[k];
+        x[i] = sum / L[i * n + i];
+    }
+}
+
+static void gp_cholesky_invert(const float* A, int n, float* A_inv) {
+    static float L[PCA_PARAMS * PCA_PARAMS];
+    gp_cholesky_decomp(A, n, L);
+    float e[PCA_PARAMS];
+    float col[PCA_PARAMS];
+    for (int j = 0; j < n; j++) {
+        for (int i = 0; i < n; i++) e[i] = (i == j) ? 1.0f : 0.0f;
+        gp_cholesky_solve_vec(L, n, e, col);
+        for (int i = 0; i < n; i++) A_inv[i * n + j] = col[i];
+    }
+}
+
+static void init_gp_state_internal(void) {
+    qCLS_PCA_Model model;
+    qcls_pca_init_model(&model);
+
+    global_gp_state.beta = 0.4788f;
+    global_gp_state.lambda = 0.10f;
+    global_gp_state.num_trials = 0;
+
+    static const float freq_list[10] = {250.0f, 500.0f, 750.0f, 1000.0f, 1500.0f, 2000.0f, 3000.0f, 4000.0f, 6000.0f, 8000.0f};
+    float log_freqs[10];
+    for (int f = 0; f < 10; f++) log_freqs[f] = log2f(freq_list[f]);
+
+    // W[j, c] = d[j] * V[j, c] * score_std[c]
+    float W[PCA_PARAMS][PCA_COMPONENTS];
+    for (int j = 0; j < PCA_PARAMS; j++) {
+        global_gp_state.mu_0[j] = model.mu[j];
+        for (int c = 0; c < PCA_COMPONENTS; c++) {
+            W[j][c] = model.d[j] * model.V[j * PCA_COMPONENTS + c] * model.score_std[c];
+        }
+    }
+
+    for (int i = 0; i < PCA_PARAMS; i++) {
+        int f1 = i / 10, b1 = i % 10;
+        float amp1 = 5.0f - 0.3f * (float)b1;
+        for (int j = 0; j < PCA_PARAMS; j++) {
+            int f2 = j / 10, b2 = j % 10;
+            float amp2 = 5.0f - 0.3f * (float)b2;
+            float df = (log_freqs[f1] - log_freqs[f2]) / 1.0f;
+            float db = ((float)(b1 - b2)) / 2.5f;
+            float k_res = amp1 * amp2 * expf(-0.5f * (df * df + db * db));
+
+            float ww = 0.0f;
+            for (int c = 0; c < PCA_COMPONENTS; c++) ww += W[i][c] * W[j][c];
+
+            float val = ww + k_res + ((i == j) ? 0.25f : 0.0f);
+            global_gp_state.Sigma_0[i * PCA_PARAMS + j] = val;
+        }
+    }
+
+    // Incorporate audiogram prior into Prec_0 and mu_0 if qcls_audiogram_prior was set
+    gp_cholesky_invert(global_gp_state.Sigma_0, PCA_PARAMS, global_gp_state.Prec_0);
+
+    for (int i = 0; i < PCA_PARAMS; i++) {
+        global_gp_state.mu[i] = global_gp_state.mu_0[i];
+    }
+    memcpy(global_gp_state.Sigma, global_gp_state.Sigma_0, sizeof(global_gp_state.Sigma_0));
+    global_gp_state.ready = 1;
+}
+
+void qcls_gp_update_trial(float trial_f, float trial_l, float trial_r) {
+    if (!global_gp_state.ready) init_gp_state_internal();
+    if (global_gp_state.num_trials >= GP_MAX_TRIALS) return;
+
+    int t_idx = global_gp_state.num_trials;
+    int fi = qcls_pca_freq_index(trial_f);
+    global_gp_state.hist_f_idx[t_idx] = fi;
+    global_gp_state.hist_l[t_idx] = trial_l;
+    for (int k = 0; k < 10; k++) {
+        global_gp_state.hist_hits[t_idx][k] = (trial_r >= (float)(k + 1) * 5.0f) ? 1 : 0;
+    }
+    global_gp_state.num_trials++;
+
+    float p_chance[10];
+    for (int k = 0; k < 10; k++) p_chance[k] = (float)(10 - k) / 11.0f;
+
+    float beta = global_gp_state.beta;
+    float lam = global_gp_state.lambda;
+    static float H[PCA_PARAMS * PCA_PARAMS];
+    static float L_chol[PCA_PARAMS * PCA_PARAMS];
+    float grad[PCA_PARAMS];
+    float hess_diag[PCA_PARAMS];
+    float step[PCA_PARAMS];
+
+    for (int iter = 0; iter < 4; iter++) {
+        for (int i = 0; i < PCA_PARAMS; i++) {
+            float sum = 0.0f;
+            for (int j = 0; j < PCA_PARAMS; j++) {
+                sum += global_gp_state.Prec_0[i * PCA_PARAMS + j] * (global_gp_state.mu[j] - global_gp_state.mu_0[j]);
+            }
+            grad[i] = -sum;
+            hess_diag[i] = 0.0f;
+        }
+
+        for (int t = 0; t < global_gp_state.num_trials; t++) {
+            int f_t = global_gp_state.hist_f_idx[t];
+            float lev = global_gp_state.hist_l[t];
+            for (int k = 0; k < 10; k++) {
+                int idx = f_t * 10 + k;
+                float a_k = global_gp_state.mu[idx];
+                float z = beta * (lev - a_k);
+                if (z < -30.0f) z = -30.0f;
+                if (z > 30.0f) z = 30.0f;
+                float s = 1.0f / (1.0f + expf(-z));
+                float p = lam * p_chance[k] + (1.0f - lam) * s;
+                if (p < 1e-6f) p = 1e-6f;
+                if (p > 1.0f - 1e-6f) p = 1.0f - 1e-6f;
+
+                float dp_da = -(1.0f - lam) * beta * s * (1.0f - s);
+                float y = (float)global_gp_state.hist_hits[t][k];
+                grad[idx] += ((y - p) / (p * (1.0f - p))) * dp_da;
+                hess_diag[idx] += (dp_da * dp_da) / (p * (1.0f - p));
+            }
+        }
+
+        memcpy(H, global_gp_state.Prec_0, sizeof(global_gp_state.Prec_0));
+        for (int i = 0; i < PCA_PARAMS; i++) H[i * PCA_PARAMS + i] += hess_diag[i];
+
+        gp_cholesky_decomp(H, PCA_PARAMS, L_chol);
+        gp_cholesky_solve_vec(L_chol, PCA_PARAMS, grad, step);
+
+        float max_step = 0.0f;
+        for (int i = 0; i < PCA_PARAMS; i++) {
+            global_gp_state.mu[i] += step[i];
+            if (fabsf(step[i]) > max_step) max_step = fabsf(step[i]);
+        }
+        if (max_step < 1e-2f) break;
+    }
+
+    // Recompute final posterior covariance Sigma = H^-1
+    for (int i = 0; i < PCA_PARAMS; i++) hess_diag[i] = 0.0f;
+    for (int t = 0; t < global_gp_state.num_trials; t++) {
+        int f_t = global_gp_state.hist_f_idx[t];
+        float lev = global_gp_state.hist_l[t];
+        for (int k = 0; k < 10; k++) {
+            int idx = f_t * 10 + k;
+            float z = beta * (lev - global_gp_state.mu[idx]);
+            if (z < -30.0f) z = -30.0f;
+            if (z > 30.0f) z = 30.0f;
+            float s = 1.0f / (1.0f + expf(-z));
+            float p = lam * p_chance[k] + (1.0f - lam) * s;
+            if (p < 1e-6f) p = 1e-6f;
+            if (p > 1.0f - 1e-6f) p = 1.0f - 1e-6f;
+            float dp_da = -(1.0f - lam) * beta * s * (1.0f - s);
+            hess_diag[idx] += (dp_da * dp_da) / (p * (1.0f - p));
+        }
+    }
+    memcpy(H, global_gp_state.Prec_0, sizeof(global_gp_state.Prec_0));
+    for (int i = 0; i < PCA_PARAMS; i++) H[i * PCA_PARAMS + i] += hess_diag[i];
+    gp_cholesky_invert(H, PCA_PARAMS, global_gp_state.Sigma);
+}
+
+void qcls_select_gp_next(float min_L, float max_L, float* out_f, float* out_l) {
+    if (!global_gp_state.ready) init_gp_state_internal();
+
+    float l_start = ceilf(min_L / 5.0f) * 5.0f;
+    if (l_start < 0.0f) l_start = 0.0f;
+    float l_end = floorf(max_L / 5.0f) * 5.0f;
+    if (l_end > 105.0f) l_end = 105.0f;
+
+    float p_chance[10];
+    for (int k = 0; k < 10; k++) p_chance[k] = (float)(10 - k) / 11.0f;
+
+    float beta = global_gp_state.beta;
+    float lam = global_gp_state.lambda;
+    float best_score = -1.0f;
+    float best_f = 1000.0f;
+    float best_l = 50.0f;
+
+    for (int fi = 0; fi < N_FREQS; fi++) {
+        float col_norms_sq[10];
+        float diag_var[10];
+        for (int k = 0; k < 10; k++) {
+            int col_idx = fi * 10 + k;
+            diag_var[k] = global_gp_state.Sigma[col_idx * PCA_PARAMS + col_idx];
+            float csq = 0.0f;
+            for (int r = 0; r < PCA_PARAMS; r++) {
+                float v = global_gp_state.Sigma[r * PCA_PARAMS + col_idx];
+                csq += v * v;
+            }
+            col_norms_sq[k] = csq;
+        }
+
+        if (l_end < l_start) {
+            float mid = (min_L + max_L) * 0.5f;
+            best_f = BAND_HZ[fi];
+            best_l = mid;
+            break;
+        }
+
+        for (float lev = l_start; lev <= l_end + 0.1f; lev += 5.0f) {
+            float ivr = 0.0f;
+            for (int k = 0; k < 10; k++) {
+                float a_k = global_gp_state.mu[fi * 10 + k];
+                float z = beta * (lev - a_k);
+                if (z < -30.0f) z = -30.0f;
+                if (z > 30.0f) z = 30.0f;
+                float s = 1.0f / (1.0f + expf(-z));
+                float p = lam * p_chance[k] + (1.0f - lam) * s;
+                if (p < 1e-6f) p = 1e-6f;
+                if (p > 1.0f - 1e-6f) p = 1.0f - 1e-6f;
+                float dp_da = -(1.0f - lam) * beta * s * (1.0f - s);
+                float w = (dp_da * dp_da) / (p * (1.0f - p));
+                ivr += (w / (1.0f + w * diag_var[k])) * col_norms_sq[k];
+            }
+            if (ivr > best_score) {
+                best_score = ivr;
+                best_f = BAND_HZ[fi];
+                best_l = lev;
+            }
+        }
+    }
+
+    float jitter = (((float)(rand() % 101) / 100.0f) - 0.5f) * 4.0f;
+    float final_l = best_l + jitter;
+    if (final_l < min_L) final_l = min_L;
+    if (final_l > max_L) final_l = max_L;
+    *out_f = best_f;
+    *out_l = floorf(final_l + 0.5f);
+}
+
+int qcls_gp_report(float* out_mu, float* out_sd) {
+    if (!out_mu) return 0;
+    if (!global_gp_state.ready) init_gp_state_internal();
+
+    for (int f = 0; f < 10; f++) {
+        for (int b = 0; b < 10; b++) {
+            float val = global_gp_state.mu[f * 10 + b];
+            if (b > 0 && val < out_mu[f * 10 + b - 1] + 0.5f) {
+                val = out_mu[f * 10 + b - 1] + 0.5f;
+            }
+            out_mu[f * 10 + b] = val;
+            if (out_sd) {
+                int idx = f * 10 + b;
+                float v = global_gp_state.Sigma[idx * PCA_PARAMS + idx];
+                out_sd[idx] = sqrtf(v > 0.0f ? v : 0.0f);
+            }
+        }
+    }
+    return 1;
 }
 
 void qcls_select_isophon_next(float min_L, float max_L, float* out_f, float* out_l) {
