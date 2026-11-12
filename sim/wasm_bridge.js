@@ -92,6 +92,9 @@ async function dispatch(message) {
             return { ok: true };
         case "update":
             Module._qcls_update_trial(message.frequency, message.level, message.response);
+            if (Module._qcls_gp_update_trial) {
+                Module._qcls_gp_update_trial(message.frequency, message.level, message.response);
+            }
             return { ok: true };
         case "bayesian":
             return readStimulus(
@@ -105,6 +108,22 @@ async function dispatch(message) {
                 message.min_level,
                 message.max_level
             );
+        case "gp":
+            return readStimulus(
+                Module._qcls_select_gp_next,
+                message.min_level,
+                message.max_level
+            );
+        case "gp_report": {
+            const outputPointer = Module._malloc(100 * 4);
+            try {
+                const ok = Module._qcls_gp_report(outputPointer, 0);
+                if (!ok) throw new Error("qcls_gp_report failed");
+                return { boundaries: Array.from(new Float32Array(Module.HEAPF32.buffer, outputPointer, 100)) };
+            } finally {
+                Module._free(outputPointer);
+            }
+        }
         case "fit":
             return { boundaries: runFit(message) };
         case "set_pca_model":

@@ -71,7 +71,7 @@ if __package__:
 else:
     from mcpf_simulator import FREQS_HZ, N_BOUNDARIES, VirtualListener, load_ground_truth
 
-MODE_CODES = {"random": 0, "bayesian": 1, "isophon": 2}
+MODE_CODES = {"random": 0, "bayesian": 1, "isophon": 2, "gp": 3}
 
 
 # --------------------------------------------------------------------------

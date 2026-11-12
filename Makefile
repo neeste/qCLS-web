@@ -1,6 +1,8 @@
+-include .env
+
 CC = emcc
 CFLAGS = -O3 -Wall
-EXPORTS = -s EXPORTED_FUNCTIONS="['_generate_stimulus', '_qcls_update_trial', '_qcls_select_bayesian_next', '_qcls_select_isophon_next', '_init_bayesian_state', '_qcls_audiogram_prior', '_qcls_report', '_qcls_pca_fit_report', '_qcls_pca_set_model', '_qcls_set_transducer', '_malloc', '_free']"
+EXPORTS = -s EXPORTED_FUNCTIONS="['_generate_stimulus', '_qcls_update_trial', '_qcls_select_bayesian_next', '_qcls_select_isophon_next', '_qcls_gp_update_trial', '_qcls_select_gp_next', '_qcls_gp_report', '_init_bayesian_state', '_qcls_audiogram_prior', '_qcls_report', '_qcls_pca_fit_report', '_qcls_pca_set_model', '_qcls_set_transducer', '_malloc', '_free']"
 METHODS = -s EXPORTED_RUNTIME_METHODS="['ccall', 'cwrap', 'HEAPF32']"
 
 all: qcls_core.js
@@ -19,6 +21,10 @@ em :
 	@echo source ~/emsdk/emsdk_env.sh
 
 deploy:
+	@if [ -z "$(FTP_CREDS)" ]; then \
+		echo "Error: FTP_CREDS environment variable is not set. Use: FTP_CREDS='user:pass' make deploy"; \
+		exit 1; \
+	fi
 	for f in qcls_core.js qcls_core.wasm index.html guide.html; do \
-		curl -T $$f "ftp://audres_deploy%40bonkachen.com:BTNRH1982%21@bonkachen.com/qCLS/$$f"; \
+		curl -T $$f "ftp://$(FTP_CREDS)@bonkachen.com/qCLS/$$f"; \
 	done
