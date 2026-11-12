@@ -27,8 +27,19 @@
 <h1>qCLS Operator Guide</h1>
 <p>Categorical loudness scaling in the browser. Everything runs locally; no
 participant data leaves the machine.</p>
+<p>Open the app through an HTTP or HTTPS web server, not by double-clicking
+the HTML file. A <code>file://</code> address cannot load the WebAssembly
+engine. For a local session, run
+<code>python3 -m http.server 8000 --bind 127.0.0.1</code> in the app folder
+and open <code>http://localhost:8000</code>. Wait for <em>Status: Ready</em>
+in the menu before starting.</p>
 
 <h2>1. Before each session</h2>
+<p>Open <strong>Menu</strong> in the bottom bar. Settings are grouped under
+<em>Participant &amp; stimulus</em>, <em>Tracking &amp; trials</em>, and
+<em>Audiogram (optional)</em>. Calibration is at the bottom of the menu.
+The green <em>Run Test</em> button is in the bottom bar, to the left of
+<em>Menu</em>. Close the menu with <em>Close</em>, Escape, or a tap outside the sheet.</p>
 <ol>
   <li><strong>Calibrate.</strong> Click <em>Calibrate</em> for a continuous 1 kHz
       tone at 60 dB SPL and set the hardware to match. Click again to stop.
@@ -77,8 +88,20 @@ transducers were removed after the ER-3A row from that source proved up to
 adding it.</div>
 
 <h2>4. Running the test</h2>
-<p>Click <em>Run Test</em>. The listener sees the response scale and the
-instructions available from <em>View Instructions</em>.</p>
+<p>Click the green <em>Run Test</em> button in the bottom bar. The instructions
+open; the test starts only after the participant selects <em>OK</em>.
+Escape cancels the start. Viewing instructions separately from the menu does
+not start a test. Any calibration tone stops before the pre-test instructions.
+A gold speaker icon at the top indicates that a sound is playing. It disappears
+when the sound ends and the response bars become available.
+During the test the listener sees the response scale, logos, progress, and narrow bottom bar.
+All 11 bars share the available height on phones, tablets, and computers;
+on wide screens, their centered widths scale with their heights to preserve
+the original bar aspect ratios. On narrow screens, the widest is capped at the
+available width and the other widths shrink proportionally.
+Participant instructions are available under
+<em>Menu &gt; Instructions &amp; guide &gt; View Instructions</em>.
+Saved results can be opened under <em>Menu &gt; Previous sessions</em>.</p>
 <table>
   <tr><th>Phase 1</th><td>Brackets the listener's range. Descends in 10 dB steps
       until "Can't Hear", then ascends from the start level until "Too Loud" or

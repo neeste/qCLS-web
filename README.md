@@ -157,17 +157,38 @@ Conditioning on the audiogram is worth 0.396 dB, SE 0.116, t = 3.4, on 148
 listeners replaying recorded responses.
 
 ## 8. How to Use the App
-1. **Load the App:** Open `index.html` in any modern web browser. The app needs
-   a local server, such as Python's `http.server`, so WebAssembly can load.
-2. **Configure:** Participant ID, Test Ear, Stimulus Type/Bandwidth, Start
-   Level, and **Max Output**.
-3. **Optional:** Enter the audiogram, and set units and transducer to match how
-   it was measured.
+1. **Load the App:** Serve this folder through a web server and open its HTTP
+   address in a modern browser. Do not double-click `index.html`: a `file://`
+   address cannot load the WebAssembly engine. For example, run
+   `python3 -m http.server 8000 --bind 127.0.0.1` from the repository folder,
+   then open `http://localhost:8000`. Wait for **Status: Ready** in the menu
+   before calibrating or running a test. Engine loading failures also appear
+   above the rating bars.
+   The landing screen shows all 11 rating bars, with **Menu** in the narrow
+   bottom bar. Bar heights share the space between the partner logos and bottom
+   bar. On wide screens, each centered bar's width scales with its height,
+   preserving its original aspect ratio (original heights: 42 px; widths:
+   180 through 430 px). On narrow screens, the widest bar is capped at the
+   available screen width and the others shrink proportionally. This also
+   applies when rotating a phone or tablet or resizing the browser.
+2. **Configure:** Open **Menu**, then **Participant & stimulus** for Participant
+   ID, Test Ear, Stimulus Type/Bandwidth, Center Frequency, Start Level, and
+   **Max Output**. **Tracking & trials** contains the adaptive mode and trial count.
+3. **Optional:** Expand **Audiogram (optional)**, enter the thresholds, and set
+   units and transducer to match how they were measured.
 4. **Calibrate:** Click **Calibrate** for a continuous 1 kHz reference tone
   labelled 60 dB SPL. Click again to stop. This is an operator check of the
   audio path; it does not alter numerical stimulus levels, contour estimates,
   or the audiogram prior.
-5. **Run Test:** Click **Run Test** to begin Phase 1.
+5. **Run Test:** Click the green **Run Test** button to the left of **Menu** in
+   the bottom bar. Read the instructions and select **OK** to begin Phase 1.
+   Dismissing the instructions with Escape cancels the start; opening **View
+   Instructions** from the menu does not start a test. A gold speaker icon at
+   the top appears while each stimulus (or calibration tone) is playing and
+   disappears when playback ends, when the rating bars become available.
+   Calibration stops before the pre-test instructions open. **Instructions
+   & guide** contains participant instructions and the operator guide. Close the
+   menu with **Close**, Escape, or a tap outside the sheet.
 6. **Export:** On completion, two downloads are offered.
    - **Download trials (TBT)** is the raw input: phase, trial, frequency,
      level, response.
@@ -175,9 +196,16 @@ listeners replaying recorded responses.
      and fitted level. It does not currently include uncertainty estimates.
    Filenames are `qCLS_TBT_[ID]_[Ear]_[YYYYMMDD].csv` and `qCLS_ELC_...`.
 
+The navy, cream, and gold styling follows the lab's
+[Hearing Screener](https://github.com/AHSLab-UW/UWAHSLAB_Hearing_Screener).
+The header uses locally hosted images: the lab logo from that project's
+`images/logo.png` and the supplied
+[Boys Town logo](https://m.bbb.org/prod/ProfileImages/2023/91b33c93-d34a-486a-bca1-2cc54d56ecb2.png).
+No third-party image or font requests are needed during a participant session.
+
 ## 9. Session Storage
 Completed sessions are kept in the browser's `localStorage`, most recent first,
-capped at 50. Selecting one from **Previous Sessions** restores its contours,
+capped at 50. Selecting one from **Menu > Previous sessions** restores its contours,
 audiogram, trials and displayed growth metric. The saved mode label currently
 distinguishes Bayesian from non-Bayesian sessions; isoPhon sessions are labeled
 as Random when restored.

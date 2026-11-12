@@ -2,50 +2,92 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#070d1b">
     <title>qCLS - Loudness Scaling</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f4f9; display: flex; flex-direction: column; align-items: center; padding: 20px; margin: 0; }
-        
-        #app-container { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.1); width: 880px; display: flex; gap: 20px; min-height: 650px; position: relative; }
-        
-        #sidebar { width: 280px; border-right: 1px solid #ddd; padding-right: 20px; display: flex; flex-direction: column; }
-        .sidebar-top { flex-grow: 1; }
-        .sidebar-bottom { margin-top: auto; }
-        
-        #test-main { flex-grow: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-start; padding-top: 10px; }
-        
+        :root { color-scheme: light; --navy: #070d1b; --blue: #394c7d; --gold: #efc563; --cream: #f2f3c0; }
+        * { box-sizing: border-box; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: linear-gradient(var(--blue), var(--navy)); color: var(--cream); margin: 0; }
+        button, input, select { font: inherit; }
+        button, summary { touch-action: manipulation; }
+        button:focus-visible, summary:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible { outline: 3px solid var(--gold); outline-offset: 3px; }
+        #app-container { height: 100vh; height: 100dvh; min-height: 320px; display: flex; flex-direction: column; padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left); }
+        .brand-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 6px 16px; flex-shrink: 0; }
+        #sound-indicator { width: 32px; height: 32px; flex-shrink: 0; color: var(--gold); }
+        #sound-indicator svg { width: 100%; height: 100%; visibility: hidden; }
+        #sound-indicator[data-playing="true"] svg { visibility: visible; }
+        .lab-brand { display: flex; align-items: center; gap: 8px; font-size: clamp(11px, 1.5vw, 15px); letter-spacing: 0.06em; }
+        .lab-brand img { width: clamp(36px, 6vh, 60px); height: clamp(36px, 6vh, 60px); object-fit: contain; }
+        .hospital-brand { display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 4px 10px; background: white; border-radius: 6px; color: #005675; font-size: clamp(8px, 1vw, 11px); }
+        .hospital-brand img { display: block; width: clamp(100px, 18vw, 170px); height: clamp(30px, 5vh, 50px); object-fit: contain; }
+        #test-main { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; overflow-y: auto; }
+        #engine-error { flex-shrink: 0; margin: 0; padding: 12px 16px; background: #fff0ed; color: #8a2418; font-size: 14px; }
+        #bottom-bar { flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 5px 16px calc(5px + env(safe-area-inset-bottom)); border-top: 1px solid #efc56355; background: var(--navy); }
+        #bottom-bar h1 { margin: 0; font-size: 15px; font-weight: 500; }
+        #bottom-bar h1 strong { color: var(--gold); margin-right: 8px; }
+        .bottom-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
+        #menu-btn, #menu-close-btn { border: 1px solid var(--gold); border-radius: 6px; background: transparent; color: var(--cream); padding: 8px 16px; cursor: pointer; }
+        dialog { color: #24304a; border: 0; box-shadow: 0 8px 40px #0006; }
+        dialog::backdrop { background: #070d1ba6; }
+        #control-menu { position: fixed; inset: auto 0 0; margin: 0 auto; width: min(100%, 680px); max-width: 100%; max-height: 85vh; max-height: 85dvh; padding: 0; border-radius: 18px 18px 0 0; background: #f6f7fb; }
+        .menu-heading { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: var(--blue); color: var(--cream); padding: 12px 20px; }
+        .menu-heading h2 { font-size: 18px; margin: 0; }
+        #sidebar { padding: 8px 20px calc(16px + env(safe-area-inset-bottom)); }
+        #sidebar details { border-bottom: 1px solid #d5daea; padding: 12px 0; }
+        #sidebar summary { font-weight: 600; cursor: pointer; padding: 4px 0; }
+        #sidebar details[open] summary { margin-bottom: 12px; }
+        .sidebar-bottom { margin-top: 16px; }
         .input-group { margin-bottom: 12px; }
         label { font-size: 0.85em; font-weight: bold; color: #555; display: block; margin-bottom: 4px; }
-        input, select { width: 100%; padding: 8px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
-        
-        #modal-overlay { display: none; position: fixed; z-index: 1000; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); align-items: center; justify-content: center; }
-        #modal-box { background: white; padding: 30px; border-radius: 8px; width: 450px; box-shadow: 0 5px 25px rgba(0,0,0,0.2); }
+        input, select { width: 100%; min-width: 0; padding: 8px; border: 1px solid #b8c0d3; border-radius: 4px; background: white; color: #24304a; }
+        #modal-overlay { width: min(480px, calc(100% - 24px)); max-height: 90vh; max-height: 90dvh; padding: 24px; border-radius: 12px; }
         #modal-box h3 { margin-top: 0; color: #333; }
         #modal-box ul { padding-left: 20px; color: #444; line-height: 1.5; font-size: 0.95em; }
         #modal-box li { margin-bottom: 10px; }
-        #modal-close-btn { background: #007bff; color: white; border: none; padding: 10px 25px; border-radius: 5px; cursor: pointer; float: right; font-weight: bold; margin-top: 10px; }
-        
-        #help-btn { background: none; border: none; color: #007bff; text-decoration: underline; cursor: pointer; padding: 0; font-size: 0.85em; margin-top: 10px; }
-        #scale-container { display: flex; flex-direction: column-reverse; align-items: center; gap: 6px; width: 100%; margin-top: 20px; }
-        .category-btn { height: 42px; border: none; border-radius: 4px; color: white; font-weight: bold; cursor: pointer; transition: 0.1s; font-size: 1.05em; }
-        .category-btn:disabled { background: #ccc !important; cursor: wait; }
-        #progress-container { width: 100%; display: none; flex-direction: column; align-items: center; margin-top: 15px; }
-        progress { width: 100%; height: 15px; }
-        
-        button#run-btn { background: #28a745; color: white; border: none; padding: 12px; border-radius: 5px; width: 100%; cursor: pointer; font-weight: bold; }
-        button#cal-btn { background: #007bff; color: white; border: none; padding: 10px; border-radius: 5px; width: 100%; cursor: pointer; margin-bottom: 10px; transition: background 0.2s; font-weight: bold; }
+        #modal-close-btn { background: var(--blue); color: white; border: none; padding: 10px 25px; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        #help-btn { background: none; border: none; color: #394c7d; text-decoration: underline; cursor: pointer; padding: 8px 0; font-size: 0.95em; }
+        #guide-btn { display: block; padding: 8px 0; color: #394c7d; font-size: 0.95em; }
+        #scale-container { --scale-gap: clamp(3px, 0.7vh, 8px); container-type: size; flex: 1; min-height: 260px; display: flex; flex-direction: column-reverse; align-items: center; gap: var(--scale-gap); width: 100%; padding: 4px 0 8px; }
+        .category-btn { flex: 1; width: min(var(--bar-width), calc((100cqh - 10 * var(--scale-gap)) / 11 * var(--bar-ratio))); min-height: 20px; padding: 0 4px; border: 1px solid #ffffff40; border-radius: 5px; color: white; font-weight: 600; cursor: pointer; font-size: clamp(12px, 2.2vh, 22px); }
+        .category-btn:disabled { cursor: not-allowed; opacity: 0.72; }
+        .category-btn:not(:disabled):hover { filter: brightness(1.15); }
+        .category-btn:not(:disabled):active { box-shadow: inset 0 0 0 3px white; }
+        .category-btn:focus-visible { outline-offset: -4px; }
+        #progress-container { width: 100%; flex-shrink: 0; display: none; flex-direction: column; align-items: center; padding: 0 12px 6px; }
+        #prog-text { font-size: 12px; margin-bottom: 2px; }
+        progress { width: 100%; height: 8px; accent-color: var(--gold); }
+        button#run-btn { background: #28a745; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        button#cal-btn { background: #394c7d; color: white; border: none; padding: 10px; border-radius: 5px; width: 100%; cursor: pointer; transition: background 0.2s; font-weight: bold; }
         button#run-btn:disabled, button#cal-btn:disabled { background-color: #888888 !important; color: #d0d0d0 !important; cursor: not-allowed; }
-        
-        #map-title { display: none; color: #333; margin-top: 0; }
-        #heatmap { border: 1px solid #ddd; border-radius: 8px; width: 500px; height: 500px; display: none; background: white; }
+        #map-title { display: none; text-align: center; font-size: clamp(18px, 4vw, 24px); margin: 12px 0; }
+        #heatmap { border: 1px solid #ddd; border-radius: 8px; width: min(100%, 500px); height: auto; flex-shrink: 0; display: none; background: white; }
+        #metrics-container { display: none; width: min(100%, 500px); margin-top: 10px; }
+        #dl-btn { display: none; justify-content: center; flex-wrap: wrap; margin: 15px 8px; gap: 10px; }
+        #restart-message { display: none; flex-shrink: 0; margin: 0 12px 16px; text-align: center; font-size: 14px; }
+        @media (max-width: 480px) {
+            .brand-header { gap: 8px; padding-left: 8px; padding-right: 8px; }
+            .lab-brand span, #bottom-bar h1 span { display: none; }
+            #bottom-bar { padding-left: 8px; padding-right: 8px; }
+        }
+        @media (max-height: 500px) {
+            .brand-header { padding-top: 3px; padding-bottom: 3px; }
+            .lab-brand img { width: 30px; height: 30px; }
+            .hospital-brand { flex-direction: row; font-size: 9px; }
+            .hospital-brand img { width: 90px; height: 26px; }
+            #bottom-bar { padding-top: 3px; }
+            #menu-btn { padding: 5px 16px; }
+            button#run-btn { padding: 5px 12px; }
+            #scale-container { --scale-gap: 2px; min-height: 0; padding: 2px 0 4px; }
+            .category-btn { min-height: 16px; line-height: 1.15; }
+        }
     </style>
 </head>
 <body>
 
-<div id="modal-overlay">
+<dialog id="modal-overlay" aria-labelledby="instructions-title">
     <div id="modal-box">
-        <h3>Instructions</h3>
+        <h3 id="instructions-title">Instructions</h3>
         <ul>
             <li>Listen to the stimulus and select the colored bar that best matches how loud you thought the sound was.</li>
             <li>Use the bars that have labels and the bars in between that do not have labels.</li>
@@ -54,21 +96,26 @@
             <li>Remember, you are judging the loudness of the sound, not the pitch.</li>
             <li>There are no right or wrong answers. What matters is how you perceived the sound.</li>
         </ul>
-        <button id="modal-close-btn" onclick="hideInstructions()">OK</button>
+        <button id="modal-close-btn" onclick="hideInstructions()" autofocus>OK</button>
     </div>
-</div>
+</dialog>
 
-<div id="app-container">
+<dialog id="control-menu" aria-labelledby="menu-title">
+    <div class="menu-heading">
+        <h2 id="menu-title">qCLS Control</h2>
+        <button id="menu-close-btn" onclick="closeMenu()" autofocus>Close</button>
+    </div>
     <div id="sidebar">
         <div class="sidebar-top">
-            <h3 style="margin-top:0;">qCLS Control</h3>
+            <details>
+            <summary>Participant &amp; stimulus</summary>
             <div class="input-group">
-                <label>Participant ID</label>
+                <label for="participant-id">Participant ID</label>
                 <input type="text" id="participant-id" value="NH001">
             </div>
 
             <div class="input-group">
-                <label>Test Ear</label>
+                <label for="test-ear">Test Ear</label>
                 <select id="test-ear">
                     <option value="both">Both</option>
                     <option value="left">Left</option>
@@ -77,7 +124,7 @@
             </div>
             
             <div class="input-group">
-                <label>Stimulus Type</label>
+                <label for="stim-type">Stimulus Type</label>
                 <select id="stim-type">
                     <option value="0">Tone</option>
                     <option value="1">SAM-Tone</option>
@@ -86,20 +133,20 @@
                 </select>
             </div>
             <div class="input-group">
-                <label>Stimulus Bandwidth</label>
+                <label for="stim-bw">Stimulus Bandwidth</label>
                 <select id="stim-bw"></select>
             </div>
             <div class="input-group">
-                <label>Center Frequency (Hz)</label>
+                <label for="center-freq">Center Frequency (Hz)</label>
                 <input type="number" id="center-freq" value="1000">
             </div>
             <div class="input-group">
-                <label>Start Level (dB SPL)</label>
+                <label for="start-level">Start Level (dB SPL)</label>
                 <input type="number" id="start-level" value="50">
             </div>
 
             <div class="input-group">
-                <label>Max Output (dB SPL)</label>
+                <label for="max-output">Max Output (dB SPL)</label>
                 <input type="number" id="max-output" value="100" min="50" max="110" step="5">
                 <span style="font-size:0.78em; color:#666; display:block; margin-top:4px;">
                     Nothing is presented above this level. Lower it for a
@@ -109,8 +156,11 @@
                 </span>
             </div>
 
+            </details>
+            <details>
+            <summary>Tracking &amp; trials</summary>
             <div class="input-group">
-                <label>Adaptive Tracking</label>
+                <label for="adaptive-tracking">Adaptive Tracking</label>
                 <select id="adaptive-tracking">
                     <option value="0">Random</option>
                     <option value="1">Bayesian</option>
@@ -122,7 +172,7 @@
             </div>
 
             <div class="input-group">
-                <label>Total Trials</label>
+                <label for="total-trials">Total Trials</label>
                 <select id="total-trials">
                     <option value="50">50</option>
                     <option value="75">75</option>
@@ -133,12 +183,16 @@
                 </span>
             </div>
 
+            </details>
+            <details>
+            <summary>Audiogram (optional)</summary>
             <div class="control-group">
-                <label>Audiogram (optional)</label>
+                <label for="audio-units">Threshold units</label>
                 <select id="audio-units" style="margin-bottom:6px;">
                     <option value="hl" selected>thresholds in dB HL</option>
                     <option value="spl">thresholds in dB SPL</option>
                 </select>
+                <label for="transducer">Transducer</label>
                 <select id="transducer" style="margin-bottom:6px;">
                     <option value="0" selected>transducer: unspecified (legacy)</option>
                     <option value="1">ER-3A insert (BTNRH measured)</option>
@@ -152,44 +206,90 @@
                 </span>
             </div>
 
+            </details>
+            <details>
+            <summary>Previous sessions</summary>
             <div class="input-group">
-                <label>Previous Sessions</label>
+                <label for="session-list">Previous Sessions</label>
                 <select id="session-list" onchange="loadSession()"></select>
             </div>
-
-            <p id="status" style="font-size: 0.85em; color: #666; margin-top: 20px; font-weight: bold;">Status: Loading C Engine...</p>
+            </details>
+            <details>
+            <summary>Instructions &amp; guide</summary>
             <button id="help-btn" onclick="showInstructions()">View Instructions</button>
-            <a id="guide-btn" href="guide.html" target="_blank" style="display:block; margin-top:6px; font-size:0.85em; color:#007bff;">Operator Guide</a>
+            <a id="guide-btn" href="guide.html" target="_blank" rel="noopener">Operator Guide</a>
+            </details>
+            <p id="status" role="status" style="font-size: 0.85em; color: #666; margin-top: 20px; font-weight: bold;">Status: Loading C Engine...</p>
         </div>
         
         <div class="sidebar-bottom">
             <button id="cal-btn" onclick="toggleCalibrate()" disabled>Calibrate (60dB SPL)</button>
-            <button id="run-btn" onclick="startTest()" disabled>Run Test</button>
         </div>
     </div>
+</dialog>
 
-    <div id="test-main">
-        <div id="scale-container"></div>
+<div id="app-container">
+    <header class="brand-header" aria-label="Research partners">
+        <div class="lab-brand">
+            <img src="assets/uw-ahslab-logo.png" alt="Auditory &amp; Hearing Sciences Lab logo">
+            <span>UW AHSLAB</span>
+        </div>
+        <div id="sound-indicator" role="status" aria-label="No sound playing" data-playing="false">
+            <svg viewBox="0 0 32 32" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 12h6l7-6v20l-7-6H4z"/>
+                <path d="M22 11a7 7 0 0 1 0 10M26 6a14 14 0 0 1 0 20"/>
+            </svg>
+        </div>
+        <div class="hospital-brand">
+            <img src="assets/boys-town-logo.png" alt="Boys Town">
+            <span>National Research Hospital</span>
+        </div>
+    </header>
+    <p id="engine-error" role="alert" hidden></p>
+    <main id="test-main" aria-label="Loudness rating">
+        <div id="scale-container" role="group" aria-label="Choose how loud the sound was"></div>
         <div id="progress-container">
-            <span id="prog-text" style="margin-bottom: 5px; font-size: 0.9em; font-weight: bold; color: #555;">Initial Phase: Trial 1</span>
-            <progress id="test-progress" value="0" max="15"></progress>
+            <span id="prog-text" role="status">Initial Phase: Trial 1</span>
+            <progress id="test-progress" aria-label="Test progress" value="0" max="15"></progress>
         </div>
         <h2 id="map-title">Equal-Loudness Contours</h2>
         <canvas id="heatmap" width="500" height="500"></canvas>
-        <div id="metrics-container" style="display:none; justify-content:space-between; width:500px; margin-top:10px;">
-            <div style="background:#eef; padding:10px; border-radius:5px; text-align:center; flex:1; margin-right:10px;">
+        <div id="metrics-container">
+            <div style="background:#eef; padding:10px; border-radius:5px; text-align:center; flex:1;">
                 <span style="font-size:0.85em; color:#555; display:block; font-weight:bold;">Loudness Growth</span>
                 <strong id="val-slope" style="font-size:1.2em; color:#333;">--</strong>
             </div>
         </div>
-        <div id="dl-btn" style="display:none; margin-top:15px; gap:10px;">
+        <div id="dl-btn">
             <button onclick="downloadTBT()" style="padding:10px 20px; cursor:pointer; background:#333; color:white; border:none; border-radius:5px; font-weight:bold;">Download trials (TBT)</button>
             <button onclick="downloadELC()" style="padding:10px 20px; cursor:pointer; background:#333; color:white; border:none; border-radius:5px; font-weight:bold;">Download contours (ELC)</button>
         </div>
-    </div>
+        <p id="restart-message">Download your results, then refresh the browser to start a new test.</p>
+    </main>
+    <footer id="bottom-bar">
+        <h1><strong>qCLS</strong><span> Loudness scaling</span></h1>
+        <div class="bottom-actions">
+            <button id="run-btn" aria-haspopup="dialog" aria-controls="modal-overlay" onclick="requestTest()" disabled>Run Test</button>
+            <button id="menu-btn" aria-haspopup="dialog" aria-controls="control-menu" aria-expanded="false" onclick="openMenu()">Menu</button>
+        </div>
+    </footer>
 </div>
 
 <script>
+    function reportEngineError(reason) {
+        const message = location.protocol === 'file:'
+            ? 'This app cannot load its C/WebAssembly engine from a file:// address. Serve the app through a local web server, then open its http://localhost address.'
+            : 'Could not initialize the C/WebAssembly engine: ' + reason +
+              '. Check that qcls_core.js and qcls_core.wasm are available on the server, then reload.';
+        document.getElementById('status').innerText = 'Status: ' + message;
+        const error = document.getElementById('engine-error');
+        error.innerText = message;
+        error.hidden = false;
+        document.getElementById('cal-btn').disabled = true;
+        document.getElementById('run-btn').disabled = true;
+        console.error('qCLS engine initialization failed:', reason);
+    }
+
     var Module = {
         onRuntimeInitialized: function() {
             buildAudiogramInputs();
@@ -197,10 +297,12 @@
             document.getElementById('cal-btn').disabled = false;
             document.getElementById('run-btn').disabled = false;
             document.getElementById('status').innerText = "Status: Ready";
-        }
+        },
+        onAbort: reportEngineError
     };
+    if (location.protocol === 'file:') reportEngineError('Direct file access is not supported');
 </script>
-<script src="qcls_core.js"></script>
+<script src="qcls_core.js" defer onerror="reportEngineError('Failed to load qcls_core.js')"></script>
 
 <script>
     const FS = 48000;
@@ -208,6 +310,7 @@
     let audioCtx;
     let isCalibrating = false;
     let calSrc = null;
+    let testPending = false;
 
     let session = {
         p1Trials: 0, p2Trials: 0, 
@@ -221,8 +324,55 @@
     const colors = ["#0000FF","#1a00e6","#3300cc","#4d00b3","#660099","#800080","#990066","#b3004d","#cc0033","#e6001a","#FF0000"];
     const labels = ["Can't Hear", "Very Soft", "", "Soft", "", "Medium", "", "Loud", "", "Very Loud", "Too Loud"];
 
-    function hideInstructions() { document.getElementById('modal-overlay').style.display = 'none'; }
-    function showInstructions() { document.getElementById('modal-overlay').style.display = 'flex'; }
+    async function hideInstructions() {
+        const beginTest = testPending;
+        document.getElementById('modal-overlay').close();
+        testPending = false;
+        if (beginTest) {
+            try {
+                await startTest();
+            } catch (error) {
+                console.error('qCLS test startup failed:', error);
+                const message = 'Could not start the test: ' + error.message + '. Check your audio device and try again.';
+                document.getElementById('status').innerText = 'Status: ' + message;
+                const alert = document.getElementById('engine-error');
+                alert.innerText = message;
+                alert.hidden = false;
+                setSoundPlaying(false);
+                setTestControlsDisabled(false);
+            }
+        }
+    }
+    function showInstructions() { document.getElementById('modal-overlay').showModal(); }
+    document.getElementById('modal-overlay').addEventListener('close', () => { testPending = false; });
+    document.getElementById('modal-overlay').addEventListener('cancel', () => { testPending = false; });
+
+    function requestTest() {
+        if (document.getElementById('run-btn').disabled) return;
+        if (isCalibrating) stopCalibration();
+        closeMenu();
+        testPending = true;
+        showInstructions();
+    }
+
+    function setSoundPlaying(playing) {
+        const indicator = document.getElementById('sound-indicator');
+        indicator.dataset.playing = String(playing);
+        indicator.setAttribute('aria-label', playing ? 'Sound playing' : 'No sound playing');
+    }
+
+    const controlMenu = document.getElementById('control-menu');
+    function openMenu() {
+        controlMenu.showModal();
+        document.getElementById('menu-btn').setAttribute('aria-expanded', 'true');
+    }
+    function closeMenu() { controlMenu.close(); }
+    controlMenu.addEventListener('close', () => {
+        document.getElementById('menu-btn').setAttribute('aria-expanded', 'false');
+    });
+    controlMenu.addEventListener('click', (event) => {
+        if (event.target === controlMenu) closeMenu();
+    });
 
     const stimTypeSelect = document.getElementById('stim-type');
     const stimBwSelect = document.getElementById('stim-bw');
@@ -250,8 +400,10 @@
         const btn = document.createElement('button');
         btn.className = 'category-btn';
         btn.style.backgroundColor = color;
-        btn.style.width = `${180 + (i * 25)}px`;
+        btn.style.setProperty('--bar-width', `${(180 + i * 25) / 430 * 100}%`);
+        btn.style.setProperty('--bar-ratio', (180 + i * 25) / 42);
         btn.innerText = labels[i];
+        btn.setAttribute('aria-label', labels[i] || `Between ${labels[i - 1]} and ${labels[i + 1]}`);
         btn.disabled = true;
         btn.onclick = () => handleResponse(i * 5);
         container.appendChild(btn);
@@ -267,11 +419,7 @@
         const btn = document.getElementById('cal-btn');
 
         if (isCalibrating) {
-            if (calSrc) { calSrc.stop(); calSrc.disconnect(); calSrc = null; }
-            btn.innerText = "Calibrate (60dB SPL)";
-            btn.style.backgroundColor = "#007bff";
-            document.getElementById('status').innerText = "Status: Ready";
-            isCalibrating = false;
+            stopCalibration();
         } else {
             const duration = 1.0; 
             const buf = audioCtx.createBuffer(1, FS * duration, FS);
@@ -293,12 +441,23 @@
             calSrc.connect(panner);
             panner.connect(audioCtx.destination);
             calSrc.start();
+            setSoundPlaying(true);
             
             btn.innerText = "Stop Calibration";
             btn.style.backgroundColor = "#dc3545"; 
             document.getElementById('status').innerText = "Status: Calibrating...";
             isCalibrating = true;
         }
+    }
+
+    function stopCalibration() {
+        if (calSrc) { calSrc.stop(); calSrc.disconnect(); calSrc = null; }
+        const btn = document.getElementById('cal-btn');
+        btn.innerText = "Calibrate (60dB SPL)";
+        btn.style.backgroundColor = "#394c7d";
+        document.getElementById('status').innerText = "Status: Ready";
+        isCalibrating = false;
+        setSoundPlaying(false);
     }
 
     // The nine BAP bands. 8 kHz is not one of them, so it is not collected.
@@ -344,9 +503,17 @@
         document.getElementById('audiogram-grid').innerHTML = AUDIO_BANDS.map((f) =>
             `<div style="text-align:center;">
                <span style="font-size:0.7em; color:#666; display:block;">${f < 1000 ? f : (f / 1000) + 'k'}</span>
-               <input id="thr-${f}" type="number" step="5" min="-10" max="120" placeholder="--"
+               <input id="thr-${f}" aria-label="Threshold at ${f} Hz" type="number" step="5" min="-10" max="120" placeholder="--"
                       style="width:100%; box-sizing:border-box; padding:3px; text-align:center; font-size:0.85em;">
              </div>`).join('');
+    }
+
+    function setTestControlsDisabled(disabled) {
+        const ids = ['run-btn', 'cal-btn', 'test-ear', 'stim-type', 'stim-bw',
+            'center-freq', 'start-level', 'max-output', 'adaptive-tracking',
+            'total-trials', 'audio-units', 'transducer', 'session-list',
+            ...AUDIO_BANDS.map(f => 'thr-' + f)];
+        ids.forEach(id => { document.getElementById(id).disabled = disabled; });
     }
 
     // Condition the tracker's prior on the audiogram. This has to run before
@@ -385,8 +552,15 @@
     }
 
     async function startTest() {
+        setTestControlsDisabled(true);
         await initAudio();
-        if (isCalibrating) await toggleCalibrate(); 
+        if (isCalibrating) stopCalibration();
+        document.getElementById('engine-error').hidden = true;
+        closeMenu();
+        document.getElementById('scale-container').style.display = 'flex';
+        ['map-title', 'heatmap', 'metrics-container', 'dl-btn', 'restart-message'].forEach(id => {
+            document.getElementById(id).style.display = 'none';
+        });
         
         // Reset the session object for a fresh test run
         session.curF = parseFloat(document.getElementById('center-freq').value) || 1000;
@@ -409,20 +583,6 @@
         session.report = null;
         session.nThresholds = applyAudiogramPrior();
 
-        AUDIO_BANDS.forEach((f) => { document.getElementById('thr-' + f).disabled = true; });
-        document.getElementById('audio-units').disabled = true;
-        document.getElementById('transducer').disabled = true;
-        document.getElementById('run-btn').disabled = true;
-        document.getElementById('cal-btn').disabled = true;
-        document.getElementById('test-ear').disabled = true;
-        document.getElementById('stim-type').disabled = true; 
-        document.getElementById('stim-bw').disabled = true;
-        document.getElementById('center-freq').disabled = true;
-        document.getElementById('start-level').disabled = true;
-        document.getElementById('max-output').disabled = true;
-        document.getElementById('adaptive-tracking').disabled = true;
-        document.getElementById('total-trials').disabled = true;
-        
         document.getElementById('progress-container').style.display = 'flex';
         document.getElementById('test-progress').max = session.totalTrials;
         document.getElementById('test-progress').value = 0;
@@ -489,8 +649,12 @@
         src.connect(panner);
         panner.connect(audioCtx.destination);
 
-        src.onended = () => document.querySelectorAll('.category-btn').forEach(b => b.disabled = false);
+        src.onended = () => {
+            setSoundPlaying(false);
+            document.querySelectorAll('.category-btn').forEach(b => b.disabled = false);
+        };
         src.start();
+        setSoundPlaying(true);
     }
 
     function handleResponse(val) {
@@ -685,11 +849,13 @@
 
             
             document.getElementById('status').innerText = "Status: Complete";
+            document.getElementById('restart-message').style.display = 'block';
             document.getElementById('map-title').style.display = 'block';
             document.getElementById('heatmap').style.display = 'block';
             document.getElementById('dl-btn').style.display = 'flex';
             
             document.getElementById('metrics-container').style.display = 'flex';
+            document.getElementById('restart-message').style.display = 'block';
             // Loudness growth is the rate the scale is actually reported in:
             // 45 CU between the CU5 and CU50 contours, divided by the level
             // range they span, averaged over the bands. get_average_slope
@@ -707,6 +873,7 @@
                 : "--";
             renderContours();
             saveSession();
+            setTestControlsDisabled(false);
         }, 100);
     }
 
@@ -884,6 +1051,9 @@
         document.getElementById('val-slope').innerText = r.metrics.growth;
         document.getElementById('status').innerText =
             "Status: Loaded " + r.when.slice(0, 16).replace('T', ' ') + " (" + r.mode + ")";
+        document.getElementById('scale-container').style.display = 'none';
+        document.getElementById('progress-container').style.display = 'none';
+        closeMenu();
         renderContours();
     }
 
