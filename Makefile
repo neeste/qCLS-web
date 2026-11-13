@@ -25,6 +25,6 @@ deploy:
 		echo "Error: FTP_CREDS environment variable is not set. Use: FTP_CREDS='user:pass' make deploy"; \
 		exit 1; \
 	fi
-	for f in qcls_core.js qcls_core.wasm index.html guide.html; do \
-		curl -T $$f "ftp://$(FTP_CREDS)@bonkachen.com/qCLS/$$f"; \
+	for f in qcls_core.js qcls_core.wasm index.html guide.html assets/uw-ahslab-logo.png assets/boys-town-logo.png; do \
+		curl --ftp-create-dirs -T $$f "ftp://$(FTP_CREDS)@bonkachen.com/qCLS/$$f"; \
 	done

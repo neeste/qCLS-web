@@ -265,7 +265,7 @@
             <button onclick="downloadTBT()" style="padding:10px 20px; cursor:pointer; background:#333; color:white; border:none; border-radius:5px; font-weight:bold;">Download trials (TBT)</button>
             <button onclick="downloadELC()" style="padding:10px 20px; cursor:pointer; background:#333; color:white; border:none; border-radius:5px; font-weight:bold;">Download contours (ELC)</button>
         </div>
-        <p id="restart-message">Download your results, then refresh the browser to start a new test.</p>
+        <p id="restart-message">Download your results, then open Menu or click Run Test to start a new test (your audiogram and settings are preserved).</p>
     </main>
     <footer id="bottom-bar">
         <h1><strong>qCLS</strong><span> Loudness scaling</span></h1>
@@ -872,7 +872,6 @@
             document.getElementById('dl-btn').style.display = 'flex';
             
             document.getElementById('metrics-container').style.display = 'flex';
-            document.getElementById('restart-message').style.display = 'block';
             // Loudness growth is the rate the scale is actually reported in:
             // 45 CU between the CU5 and CU50 contours, divided by the level
             // range they span, averaged over the bands. get_average_slope
