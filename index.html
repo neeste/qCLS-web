@@ -224,7 +224,16 @@
         </div>
         
         <div class="sidebar-bottom">
-            <button id="cal-btn" onclick="toggleCalibrate()" disabled>Calibrate (60dB SPL)</button>
+            <div class="input-group">
+                <label for="cal-frequency">Calibration Frequency (Hz)</label>
+                <input id="cal-frequency" type="number" value="1000" min="20" max="20000" step="any" required>
+            </div>
+            <div class="input-group">
+                <label for="cal-level">Calibration Level (dB SPL)</label>
+                <input id="cal-level" type="number" value="60" min="-10" max="100" step="any" required aria-describedby="cal-hint">
+                <small id="cal-hint">Nominal level. Verify the actual SPL with calibrated equipment.</small>
+            </div>
+            <button id="cal-btn" onclick="toggleCalibrate()" disabled>Play Calibration Tone</button>
         </div>
     </div>
 </dialog>
@@ -309,8 +318,8 @@
     const FS = 48000;
     const SCALE_FACTOR = 0.01; 
     let audioCtx;
-    let isCalibrating = false;
-    let calSrc = null;
+    let calibration = null;
+    let calibrationStarting = false;
     let testPending = false;
 
     let session = {
@@ -350,7 +359,7 @@
 
     function requestTest() {
         if (document.getElementById('run-btn').disabled) return;
-        if (isCalibrating) stopCalibration();
+        stopCalibration();
         closeMenu();
         testPending = true;
         showInstructions();
@@ -416,50 +425,75 @@
     }
 
     async function toggleCalibrate() {
-        await initAudio();
-        const btn = document.getElementById('cal-btn');
-
-        if (isCalibrating) {
+        if (calibration) {
             stopCalibration();
-        } else {
-            const duration = 1.0; 
-            const buf = audioCtx.createBuffer(1, FS * duration, FS);
-            const data = buf.getChannelData(0);
-            const peak = 1.0 * Math.sqrt(2); 
+            return;
+        }
+        const btn = document.getElementById('cal-btn');
+        if (btn.disabled || calibrationStarting || testPending) return;
 
-            for (let i = 0; i < data.length; i++) {
-                data[i] = (peak * Math.sin(2 * Math.PI * 1000 * (i / FS))) * SCALE_FACTOR;
-            }
+        calibrationStarting = true;
+        try {
+            await initAudio();
+            if (btn.disabled || testPending || !controlMenu.open) return;
 
-            calSrc = audioCtx.createBufferSource();
-            calSrc.buffer = buf;
-            calSrc.loop = true; 
-            
+            const frequencyInput = document.getElementById('cal-frequency');
+            const levelInput = document.getElementById('cal-level');
+            levelInput.max = outputCeiling();
+            if (!frequencyInput.reportValidity() || !levelInput.reportValidity()) return;
+
+            const frequency = frequencyInput.valueAsNumber;
+            const level = levelInput.valueAsNumber;
+            const source = audioCtx.createOscillator();
+            source.frequency.value = frequency;
+            const gain = audioCtx.createGain();
+            gain.gain.value = peakForLevel(level);
             const panner = audioCtx.createStereoPanner();
             const ear = document.getElementById('test-ear').value;
             panner.pan.value = (ear === 'left') ? -1 : (ear === 'right') ? 1 : 0;
 
-            calSrc.connect(panner);
+            source.connect(gain);
+            gain.connect(panner);
             panner.connect(audioCtx.destination);
-            calSrc.start();
+            source.start();
+            calibration = { source, gain, panner };
+            frequencyInput.disabled = true;
+            levelInput.disabled = true;
             setSoundPlaying(true);
-            
-            btn.innerText = "Stop Calibration";
-            btn.style.backgroundColor = "#dc3545"; 
-            document.getElementById('status').innerText = "Status: Calibrating...";
-            isCalibrating = true;
+
+            btn.innerText = 'Stop Calibration Tone';
+            btn.style.backgroundColor = '#dc3545';
+            document.getElementById('status').innerText =
+                `Status: Calibrating at ${frequency} Hz, ${level} dB SPL (nominal)`;
+        } catch (error) {
+            console.error('qCLS calibration startup failed:', error);
+            document.getElementById('status').innerText =
+                'Status: Could not play the calibration tone. Check your audio device and try again.';
+        } finally {
+            calibrationStarting = false;
         }
     }
 
     function stopCalibration() {
-        if (calSrc) { calSrc.stop(); calSrc.disconnect(); calSrc = null; }
+        if (!calibration) return;
+        const { source, gain, panner } = calibration;
+        source.stop();
+        source.disconnect();
+        gain.disconnect();
+        panner.disconnect();
+        calibration = null;
+
         const btn = document.getElementById('cal-btn');
-        btn.innerText = "Calibrate (60dB SPL)";
-        btn.style.backgroundColor = "#394c7d";
-        document.getElementById('status').innerText = "Status: Ready";
-        isCalibrating = false;
+        btn.innerText = 'Play Calibration Tone';
+        btn.style.backgroundColor = '';
+        document.getElementById('cal-frequency').disabled = btn.disabled;
+        document.getElementById('cal-level').disabled = btn.disabled;
+        document.getElementById('status').innerText = 'Status: Ready';
         setSoundPlaying(false);
     }
+
+    document.getElementById('max-output').addEventListener('input', stopCalibration);
+    document.getElementById('test-ear').addEventListener('change', stopCalibration);
 
     // The nine BAP bands. 8 kHz is not one of them, so it is not collected.
     const AUDIO_BANDS = [250, 500, 750, 1000, 1500, 2000, 3000, 4000, 6000];
@@ -494,6 +528,15 @@
     const ABS_MAX_SPL = 110;
     const LDL_BACKOFF_DB = 5;
 
+    function outputCeiling() {
+        const askedCeiling = document.getElementById('max-output').valueAsNumber;
+        return Math.min(ABS_MAX_SPL, Math.max(50, Number.isFinite(askedCeiling) ? askedCeiling : 100));
+    }
+
+    function peakForLevel(level) {
+        return Math.pow(10, (level - 60) / 20) * Math.SQRT2 * SCALE_FACTOR;
+    }
+
     // One step below a level just reported too loud, never below a floor that
     // would leave no usable range.
     function backoffFrom(lev) {
@@ -510,7 +553,7 @@
     }
 
     function setTestControlsDisabled(disabled) {
-        const ids = ['run-btn', 'cal-btn', 'test-ear', 'stim-type', 'stim-bw',
+        const ids = ['run-btn', 'cal-btn', 'cal-frequency', 'cal-level', 'test-ear', 'stim-type', 'stim-bw',
             'center-freq', 'start-level', 'max-output', 'adaptive-tracking',
             'total-trials', 'audio-units', 'transducer', 'session-list',
             ...AUDIO_BANDS.map(f => 'thr-' + f)];
@@ -555,7 +598,7 @@
     async function startTest() {
         setTestControlsDisabled(true);
         await initAudio();
-        if (isCalibrating) stopCalibration();
+        stopCalibration();
         document.getElementById('engine-error').hidden = true;
         closeMenu();
         document.getElementById('scale-container').style.display = 'flex';
@@ -572,8 +615,7 @@
         // Operator ceiling. Nothing reaches the listener above this, and the
         // equipment limit still caps it. maxL is the working ceiling, which
         // only ever ratchets down from here as discomfort is reported.
-        const askedCeiling = parseFloat(document.getElementById('max-output').value);
-        session.ceiling = Math.min(ABS_MAX_SPL, Math.max(50, isFinite(askedCeiling) ? askedCeiling : 100));
+        session.ceiling = outputCeiling();
         session.maxL = session.ceiling;
         session.phase = 'P1';
         session.p1Dir = -1; // -1 = Descending First
@@ -631,11 +673,10 @@
         // reach the listener without passing a limit.
         const lim = Math.min(session.ceiling, ABS_MAX_SPL);
         if (!(session.curL <= lim)) session.curL = lim;   // also catches NaN
-        const rmsTarget = Math.pow(10, (session.curL - 60) / 20);
-        const amp = rmsTarget * Math.sqrt(2);
+        const amp = peakForLevel(session.curL);
 
         for (let i = 0; i < numSamples; i++) {
-            data[i] = (amp * wasmAudioView[i]) * SCALE_FACTOR; 
+            data[i] = amp * wasmAudioView[i];
         }
 
         Module._free(bufferPointer);

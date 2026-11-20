@@ -181,10 +181,12 @@ listeners replaying recorded responses.
    **Max Output**. **Tracking & trials** contains the adaptive mode and trial count.
 3. **Optional:** Expand **Audiogram (optional)**, enter the thresholds, and set
    units and transducer to match how they were measured.
-4. **Calibrate:** Click **Calibrate** for a continuous 1 kHz reference tone
-  labelled 60 dB SPL. Click again to stop. This is an operator check of the
-  audio path; it does not alter numerical stimulus levels, contour estimates,
-  or the audiogram prior.
+4. **Calibrate:** Set **Calibration Frequency** and **Calibration Level**
+   (defaults: 1000 Hz and 60 dB SPL), then click **Play Calibration Tone**.
+   The continuous tone uses the selected **Test Ear** and cannot be set above
+   **Max Output**. Click **Stop Calibration Tone** before changing the frequency
+   or level. The level is nominal; verify actual SPL with calibrated equipment.
+   These settings do not change the test stimuli or the audiogram prior.
 5. **Run Test:** Click the green **Run Test** button to the left of **Menu** in
    the bottom bar. Read the instructions and select **OK** to begin Phase 1.
    Dismissing the instructions with Escape cancels the start; opening **View
