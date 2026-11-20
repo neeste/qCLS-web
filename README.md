@@ -60,7 +60,12 @@ the most uncertain boundary. isoPhon selects a random BAP band and then one of
 the CU 10, 20, 30, or 40 boundary estimates from the same current posterior.
 
 ## 4. Audio Generation & Routing
-Stimulus generation (Pure Tones, SAM-Tones, and Five-Tone Complexes) is calculated sample-by-sample in the C engine to ensure phase accuracy and precise RMS scaling. The Five-Tone Complex (Schroeder-Negative Phase) is the default; it applies the negative Schroeder phase sequence across the five components. This phase pattern is a way to control the complex's peak factor and temporal-envelope cues. Psychoacoustic masking studies show that Schroeder phase affects masked thresholds and the envelope produced by cochlear filtering: negative phase is associated with a flatter internal envelope, while positive phase produces stronger modulation (Kohlrausch & Sander, 1995; Carlyon & Datta, 1997). These findings motivate controlling phase-related cues, but they are not direct evidence that negative phase changes loudness judgments or improves categorical loudness scaling. The original zero-phase Five-Tone Complex remains available as a separate option.
+Stimuli are generated sample-by-sample in the C engine. There are two five-tone options:
+
+- **5TC-log** preserves the original zero-phase complex, with components equally spaced on a log-frequency axis.
+- **5TC-lin** (default) pairs negative Schroeder phase with five equally spaced frequencies in Hz, centered on the selected frequency. This reduces the waveform crest factor (peak divided by RMS). The exact ratio depends on the center frequency, bandwidth, and whether the onset and offset ramps are included in the RMS calculation.
+
+Psychoacoustic masking studies show that Schroeder phase affects masked thresholds and the envelope produced by cochlear filtering (Kohlrausch & Sander, 1995; Carlyon & Datta, 1997). These findings motivate controlling phase-related cues, but are not direct evidence of changes in loudness judgments or categorical loudness scaling.
 
 The default stimulus bandwidth is 1/4 octave for SAM-Tones and both Five-Tone Complexes. Pure Tone uses zero bandwidth.
 

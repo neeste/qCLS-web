@@ -101,8 +101,8 @@ static const float BAND_HZ[N_FREQS] = {250,500,750,1000,1500,2000,3000,4000,6000
 typedef enum {
     STIM_TONE = 0,
     STIM_SAM_TONE,
-    STIM_FIVE_TONE,
-    STIM_FIVE_TONE_SCHROEDER_NEGATIVE
+    STIM_FIVE_TONE_LOG,
+    STIM_FIVE_TONE_LIN
 } StimulusType;
 
 // --- STRUCTS ---
@@ -1206,14 +1206,22 @@ void generate_stimulus(float duration, float samplingRate, int stimulusType, flo
     }
 
     float f1 = centerFreq, f2 = centerFreq, f4 = centerFreq, f5 = centerFreq;
-    if ((stimulusType == STIM_FIVE_TONE ||
-         stimulusType == STIM_FIVE_TONE_SCHROEDER_NEGATIVE) &&
-        bandwidthOctaves > 0.0f) {
-        float k = powf(2.0f, bandwidthOctaves / 4.0f); 
-        f1 = centerFreq / (k * k);
-        f2 = centerFreq / k;
-        f4 = centerFreq * k;
-        f5 = centerFreq * (k * k);
+    if (bandwidthOctaves > 0.0f) {
+        if (stimulusType == STIM_FIVE_TONE_LOG) {
+            float k = powf(2.0f, bandwidthOctaves / 4.0f);
+            f1 = centerFreq / (k * k);
+            f2 = centerFreq / k;
+            f4 = centerFreq * k;
+            f5 = centerFreq * (k * k);
+        } else if (stimulusType == STIM_FIVE_TONE_LIN) {
+            // Keep the requested edge ratio while spacing the tones uniformly in Hz.
+            float ratio = powf(2.0f, bandwidthOctaves);
+            float step = 0.5f * centerFreq * (ratio - 1.0f) / (ratio + 1.0f);
+            f1 = centerFreq - 2.0f * step;
+            f2 = centerFreq - step;
+            f4 = centerFreq + step;
+            f5 = centerFreq + 2.0f * step;
+        }
     }
 
     float pure_tone_amp = sqrtf(2.0f); 
@@ -1240,12 +1248,12 @@ void generate_stimulus(float duration, float samplingRate, int stimulusType, flo
             float modulator = 1.0f + sinf(2.0f * PI * fm * t);
             val = sam_tone_amp * modulator * carrier;
         }
-        else if (stimulusType == STIM_FIVE_TONE ||
-                 stimulusType == STIM_FIVE_TONE_SCHROEDER_NEGATIVE) {
+        else if (stimulusType == STIM_FIVE_TONE_LOG ||
+                 stimulusType == STIM_FIVE_TONE_LIN) {
             float phase3 = 0.0f;
             float phase4 = 0.0f;
             float phase5 = 0.0f;
-            if (stimulusType == STIM_FIVE_TONE_SCHROEDER_NEGATIVE) {
+            if (stimulusType == STIM_FIVE_TONE_LIN) {
                 phase3 = -2.0f * PI / 5.0f;
                 phase4 = -6.0f * PI / 5.0f;
                 phase5 = -12.0f * PI / 5.0f;
