@@ -1,17 +1,25 @@
 -include .env
 
 CC = emcc
+NODE = node
 CFLAGS = -O3 -Wall
 EXPORTS = -s EXPORTED_FUNCTIONS="['_generate_stimulus', '_qcls_update_trial', '_qcls_select_bayesian_next', '_qcls_select_isophon_next', '_qcls_gp_update_trial', '_qcls_select_gp_next', '_qcls_gp_report', '_init_bayesian_state', '_qcls_audiogram_prior', '_qcls_report', '_qcls_pca_fit_report', '_qcls_pca_set_model', '_qcls_set_transducer', '_malloc', '_free']"
 METHODS = -s EXPORTED_RUNTIME_METHODS="['ccall', 'cwrap', 'HEAPF32']"
 
+.PHONY: all test test-pca-fit clean em deploy
+
 all: qcls_core.js
+
+test: qcls_core.js index.html
+	$(NODE) --check qcls_core.js
+	$(NODE) --check sim/wasm_bridge.js
+	$(NODE) test/test_qcls_smoke.js
 
 test-pca-fit:
 	cc -O3 -std=c99 pca_test/test_pca_fit.c -lm -o /tmp/qcls_test_pca_fit
 	/tmp/qcls_test_pca_fit pca_test/ground_truth.csv
 
-qcls_core.js: qcls_core.c index.html
+qcls_core.js: qcls_core.c pca_model.h
 	$(CC) $(CFLAGS) qcls_core.c -o qcls_core.js $(EXPORTS) $(METHODS) -lm
 
 clean:

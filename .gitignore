@@ -5,6 +5,16 @@
 env/
 venv/
 sim/*.csv
+!sim/mcpf_parameters.csv
 sim/*.log
 sim/loocv_results_*/
 sim/__pycache__/
+sim/generate_*.py
+qCLS_GP_*.docx
+qCLS_GP_*.pdf
+tracking_sims/export_sims_2026.py
+tracking_sims/fix_json.py
+tracking_sims/run_test.js
+tracking_sims/simulated_listeners.json
+tracking_sims/test_wasm.js
+tracking_sims/validate_tracking.js

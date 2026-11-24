@@ -320,7 +320,11 @@
         console.error('qCLS engine initialization failed:', reason);
     }
 
+    const QCLS_VERSION = '1.3.0';
     var Module = {
+        locateFile: function(path, prefix) {
+            return path.endsWith('.wasm') ? prefix + path + '?v=' + QCLS_VERSION : prefix + path;
+        },
         onRuntimeInitialized: function() {
             buildAudiogramInputs();
             refreshSessionList();
@@ -332,7 +336,7 @@
     };
     if (location.protocol === 'file:') reportEngineError('Direct file access is not supported');
 </script>
-<script src="qcls_core.js" defer onerror="reportEngineError('Failed to load qcls_core.js')"></script>
+<script src="qcls_core.js?v=1.3.0" defer onerror="reportEngineError('Failed to load qcls_core.js')"></script>
 
 <script>
     const FS = 48000;
@@ -352,8 +356,57 @@
         phase: 'P1', p1Dir: -1, 
         minL: -10, maxL: 110, ceiling: 110, curL: 50, curF: 1000, startL: 50, startVal: null,
         history: [],
-        report: null
+        report: null,
+        meta: null
     };
+
+    const STIM_TYPE_CODES = ['Tone', 'SAM-Tone', '5TC-log', '5TC-lin'];
+    const TRACKING_MODE_CODES = ['Random', 'Bayesian', 'isoPhon', 'Laplace_GP'];
+
+    function formatBandwidthCode(rawBwStr, stimTypeIdx) {
+        if (Number(stimTypeIdx) === 0 || rawBwStr === 'zero') return '0_oct';
+        if (typeof rawBwStr === 'string' && rawBwStr.startsWith('oct_')) return rawBwStr.slice(4) + '_oct';
+        if (typeof rawBwStr === 'string' && rawBwStr.startsWith('hz_')) return rawBwStr.slice(3) + '_Hz';
+        return rawBwStr || '0_oct';
+    }
+
+    function captureSessionMeta() {
+        const stimTypeIdx = parseInt(document.getElementById('stim-type').value, 10) || 0;
+        const rawBw = document.getElementById('stim-bw').value;
+        const modeIdx = parseInt(document.getElementById('adaptive-tracking').value, 10) || 0;
+        const transducerIdx = parseInt(document.getElementById('transducer').value, 10) || 0;
+        return {
+            when: null,
+            id: document.getElementById('participant-id').value.trim() || 'Subj',
+            ear: document.getElementById('test-ear').value,
+            stimTypeIdx,
+            stimType: STIM_TYPE_CODES[stimTypeIdx] || 'Tone',
+            rawBw,
+            bandwidth: formatBandwidthCode(rawBw, stimTypeIdx),
+            modeIdx,
+            mode: TRACKING_MODE_CODES[modeIdx] || 'isoPhon',
+            ceiling: session.ceiling,
+            finalMaxL: session.maxL,
+            totalTrials: session.totalTrials,
+            audioUnits: document.getElementById('audio-units').value,
+            transducerIdx,
+            transducer: transducerIdx === 1 ? 'ER-3A' : 'Legacy',
+            nThresholds: session.nThresholds || 0
+        };
+    }
+
+    function currentExportMeta() {
+        const fallback = captureSessionMeta();
+        if (!session.meta) return fallback;
+        return {
+            ...fallback,
+            ...session.meta,
+            mode: String(session.meta.mode || fallback.mode).replace(/\s+/g, '_'),
+            stimType: session.meta.stimType || fallback.stimType,
+            bandwidth: session.meta.bandwidth || fallback.bandwidth,
+            ceiling: Number.isFinite(session.meta.ceiling) ? session.meta.ceiling : fallback.ceiling
+        };
+    }
 
     const colors = ["#0000FF","#1a00e6","#3300cc","#4d00b3","#660099","#800080","#990066","#b3004d","#cc0033","#e6001a","#FF0000"];
     const labels = ["Can't Hear", "Very Soft", "", "Soft", "", "Medium", "", "Loud", "", "Very Loud", "Too Loud"];
@@ -588,9 +641,9 @@
     // the first trial: calculate_bap_next reseeds the posterior from whatever
     // prior is current, so setting it afterwards would not affect tracking.
     //
-    // The stock prior is [40 90 110] +/- 10 dB at every frequency, the same
-    // for normal hearing and for a 70 dB loss. Conditioning on the audiogram
-    // is worth 0.396 dB, SE 0.116, t = 3.4, on 148 listeners.
+    // Left blank, init_bayesian_state seeds from the cohort distribution CUK0
+    // (the audiogram integrated out over the population). Conditioning on a
+    // measured audiogram narrows each measured band to CUK's threshold prior.
     function applyAudiogramPrior() {
         const vals = AUDIO_BANDS.map((f) => {
             const raw = document.getElementById('thr-' + f).value.trim();
@@ -603,8 +656,7 @@
         // can show the audiogram against the CU5 contour.
         session.audiogramSPL = vals.map((v, i) => isFinite(v) ? (isHL ? v + retspl()[i] : v) : NaN);
 
-        // No thresholds at all means the stock prior, not a prior built from
-        // nine fallbacks, so an empty form behaves exactly as before.
+        // No thresholds at all uses the unconditioned cohort prior (CUK0).
         if (measured === 0) { Module._init_bayesian_state(); return 0; }
 
         const ptr = Module._malloc(10 * 4);
@@ -715,6 +767,7 @@
         session.history = [];
         session.report = null;
         session.nThresholds = applyAudiogramPrior();
+        session.meta = captureSessionMeta();
 
         isTesting = true;
         isPaused = false;
@@ -729,7 +782,7 @@
                 ? "  (prior conditioned on " + session.nThresholds + " threshold" +
                   (session.nThresholds === 1 ? "" : "s") + ", " +
                   document.getElementById('audio-units').value.toUpperCase() + ")"
-                : "  (stock prior, no audiogram)");
+                : "  (cohort prior, no audiogram)");
         
         stimTimerId = setTimeout(playStimulus, 1000);
     }
@@ -1163,11 +1216,27 @@
 
     function saveSession() {
         if (!session.report) return;
+        if (!session.meta) session.meta = captureSessionMeta();
+        session.meta.when = new Date().toISOString();
+        session.meta.finalMaxL = session.maxL;
+        const m = session.meta;
         const rec = {
-            when: new Date().toISOString(),
-            id: document.getElementById('participant-id').value,
-            ear: document.getElementById('test-ear').value,
-            mode: ['Random', 'Bayesian', 'isoPhon', 'Laplace GP'][parseInt(document.getElementById('adaptive-tracking').value, 10)],
+            when: m.when,
+            id: m.id,
+            ear: m.ear,
+            modeIdx: m.modeIdx,
+            mode: m.mode,
+            stimTypeIdx: m.stimTypeIdx,
+            stimType: m.stimType,
+            rawBw: m.rawBw,
+            bandwidth: m.bandwidth,
+            ceiling: m.ceiling,
+            finalMaxL: m.finalMaxL,
+            totalTrials: m.totalTrials,
+            audioUnits: m.audioUnits,
+            transducerIdx: m.transducerIdx,
+            transducer: m.transducer,
+            nThresholds: m.nThresholds,
             history: session.history,
             report: session.report,
             audiogramSPL: session.audiogramSPL || null,
@@ -1188,30 +1257,59 @@
         if (!sel) return;
         const all = loadStore();
         sel.innerHTML = `<option value="">${all.length} saved</option>` +
-            all.map((r, i) =>
-                `<option value="${i}">${r.id} ${r.ear.charAt(0).toUpperCase()} ` +
-                `${r.when.slice(0, 16).replace('T', ' ')}</option>`).join('');
+            all.map((r, i) => {
+                const stimTag = r.stimType ? ` [${r.stimType}]` : '';
+                return `<option value="${i}">${r.id} ${r.ear.charAt(0).toUpperCase()} ` +
+                       `${r.when.slice(0, 16).replace('T', ' ')}${stimTag}</option>`;
+            }).join('');
     }
 
     function loadSession() {
         const raw = document.getElementById('session-list').value;
         if (raw === '') return;
-        const r = loadStore()[parseInt(raw)];
+        const r = loadStore()[parseInt(raw, 10)];
         if (!r || !r.report) return;
 
         session.history = r.history;
         session.report = r.report;
         session.audiogramSPL = r.audiogramSPL;
+        session.meta = {
+            when: r.when || null,
+            id: r.id || 'Subj',
+            ear: r.ear || 'both',
+            stimTypeIdx: Number.isInteger(r.stimTypeIdx) ? r.stimTypeIdx : null,
+            stimType: r.stimType || 'Unknown',
+            rawBw: r.rawBw || null,
+            bandwidth: r.bandwidth || 'Unknown',
+            modeIdx: Number.isInteger(r.modeIdx) ? r.modeIdx : null,
+            mode: String(r.mode || 'Unknown').replace(/\s+/g, '_'),
+            ceiling: Number.isFinite(r.ceiling) ? r.ceiling : '',
+            finalMaxL: Number.isFinite(r.finalMaxL) ? r.finalMaxL : ''
+        };
+
         document.getElementById('participant-id').value = r.id;
         document.getElementById('test-ear').value = r.ear;
+        if (Number.isInteger(r.stimTypeIdx)) {
+            document.getElementById('stim-type').value = String(r.stimTypeIdx);
+            updateBandwidthOptions();
+            if (r.rawBw) document.getElementById('stim-bw').value = r.rawBw;
+        }
+        if (Number.isInteger(r.modeIdx)) {
+            document.getElementById('adaptive-tracking').value = String(r.modeIdx);
+        }
+        if (Number.isFinite(r.ceiling)) {
+            document.getElementById('max-output').value = String(r.ceiling);
+        }
 
         document.getElementById('map-title').style.display = 'block';
         document.getElementById('heatmap').style.display = 'block';
         document.getElementById('dl-btn').style.display = 'flex';
         document.getElementById('metrics-container').style.display = 'flex';
         document.getElementById('val-slope').innerText = r.metrics.growth;
+        const detailParts = [r.stimType, r.bandwidth, r.mode].filter(Boolean);
         document.getElementById('status').innerText =
-            "Status: Loaded " + r.when.slice(0, 16).replace('T', ' ') + " (" + r.mode + ")";
+            "Status: Loaded " + r.when.slice(0, 16).replace('T', ' ') +
+            (detailParts.length ? " (" + detailParts.join(", ") + ")" : "");
         document.getElementById('scale-container').style.display = 'none';
         document.getElementById('progress-container').style.display = 'none';
         closeMenu();
@@ -1219,45 +1317,59 @@
     }
 
     // Equal-loudness contours: the result of the test rather than its raw
-    // input. One row per band and category boundary.
+    // input. One row per band and category boundary, with session provenance
+    // in trailing columns so back-to-back stimulus comparisons remain distinct
+    // while preserving Band,Freq_Hz,CU,Level_dB_SPL compatibility with qPRO/qLDM.
     function downloadELC() {
         if (!session.report) return;
-        let csv = "Band,Freq_Hz,CU,Level_dB_SPL\n";
+        const m = currentExportMeta();
+        let csv = "Band,Freq_Hz,CU,Level_dB_SPL,Stim_Type,Bandwidth,Tracking_Mode,Ceiling_dB_SPL\n";
         AUDIO_BANDS.forEach((f, i) => {
             for (let b = 0; b < 10; b++) {
                 csv += `${i + 1},${f},${(b + 1) * 5},` +
-                       `${session.report.mu[i * 10 + b].toFixed(2)}\n`;
+                       `${session.report.mu[i * 10 + b].toFixed(2)},` +
+                       `${m.stimType},${m.bandwidth},${m.mode},${m.ceiling}\n`;
             }
         });
-        saveCSV(csv, "ELC");
+        saveCSV(csv, "ELC", m);
     }
 
-    function saveCSV(csv, kind) {
-        const subjId = document.getElementById('participant-id').value;
-        const earFmt = document.getElementById('test-ear').value.charAt(0).toUpperCase();
-        const today = new Date();
-        const dateStr = `${today.getFullYear()}` +
-                        `${String(today.getMonth() + 1).padStart(2, '0')}` +
-                        `${String(today.getDate()).padStart(2, '0')}`;
+    function saveCSV(csv, kind, meta) {
+        const m = meta || currentExportMeta();
+        const subjId = String(m.id || document.getElementById('participant-id').value || 'Subj')
+            .trim().replace(/[^A-Za-z0-9_-]/g, '') || 'Subj';
+        const earRaw = m.ear || document.getElementById('test-ear').value || 'both';
+        const earFmt = earRaw.charAt(0).toUpperCase();
+        const parsedDt = m.when ? new Date(m.when) : new Date();
+        const dt = Number.isNaN(parsedDt.getTime()) ? new Date() : parsedDt;
+        const dateStr = `${dt.getFullYear()}` +
+                        `${String(dt.getMonth() + 1).padStart(2, '0')}` +
+                        `${String(dt.getDate()).padStart(2, '0')}`;
+        const timeStr = `${String(dt.getHours()).padStart(2, '0')}` +
+                        `${String(dt.getMinutes()).padStart(2, '0')}`;
+        const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
         const a = document.createElement('a');
-        a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
-        a.download = `qCLS_${kind}_${subjId}_${earFmt}_${dateStr}.csv`;
+        a.href = url;
+        a.download = `qCLS_${kind}_${subjId}_${earFmt}_${dateStr}_${timeStr}.csv`;
         a.click();
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
     }
 
-    // Trial by trial: what was presented and what the listener said.
+    // Trial by trial: what was presented, what the listener said, and session settings.
     function downloadTBT() {
-        let csv = "Phase,Trial,Freq,Level,Response\n";
+        const m = currentExportMeta();
+        let csv = "Phase,Trial,Freq,Level,Response,Stim_Type,Bandwidth,Tracking_Mode,Ceiling_dB_SPL\n";
         let countP1 = 0, countP2 = 0;
         
         session.history.forEach((t) => {
             let trialNum = 0;
             if (t.p === 'P1') { countP1++; trialNum = countP1; }
             else { countP2++; trialNum = countP2; }
-            csv += `${t.p},${trialNum},${t.f.toFixed(0)},${t.l.toFixed(1)},${t.r}\n`;
+            csv += `${t.p},${trialNum},${t.f.toFixed(0)},${t.l.toFixed(1)},${t.r},` +
+                   `${m.stimType},${m.bandwidth},${m.mode},${m.ceiling}\n`;
         });
         
-        saveCSV(csv, "TBT");
+        saveCSV(csv, "TBT", m);
     }
 </script>
 </body>

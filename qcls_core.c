@@ -383,16 +383,15 @@ void init_bayesian_state() {
     global_qcls_state.par.beta = 0.4788f;
     global_qcls_state.par.lambda = 0.1f;
     
+    // Default unconditioned prior: use the empirical cohort distribution CUK0
+    // (the audiogram integrated out over the population, matching an all-NaN
+    // call to qcls_audiogram_prior) rather than a uniform [40, 90, 110] +/- 10 dB
+    // guess that pulls normal-hearing CU 5 upward.
     for (int i = 0; i < N_FREQS; i++) {
-        global_qcls_state.par.phi_prior_mu[i][0] = 40.0f;
-        global_qcls_state.par.phi_prior_mu[i][1] = 90.0f;
-        global_qcls_state.par.phi_prior_mu[i][2] = 110.0f;
-    }
-    
-    for (int i = 0; i < N_FREQS; i++) {
-        global_qcls_state.par.phi_prior_std[i][0] = 10.0f;
-        global_qcls_state.par.phi_prior_std[i][1] = 10.0f;
-        global_qcls_state.par.phi_prior_std[i][2] = 10.0f;
+        for (int j = 0; j < 3; j++) {
+            global_qcls_state.par.phi_prior_mu[i][j]  = CUK0[i][j][0];
+            global_qcls_state.par.phi_prior_std[i][j] = CUK0[i][j][1];
+        }
     }
 
     global_qcls_state.par.x_lim[0][0] = 1.0f;
@@ -678,10 +677,9 @@ float Kalman_update(qCLS_State* qcls, float* phi, float* P, float* kfreqs, int p
 // larger than the residual scatter the prior is built on. It would not fail
 // loudly, it would quietly bias the low frequencies.
 //
-// The stock prior is [40 90 110] +/- 10 dB at every frequency, the same for a
-// listener with normal hearing and one with a 70 dB loss. On 148 CLS2023
-// listeners replaying recorded responses, conditioning on the audiogram is
-// worth 0.396 dB, SE 0.116, t = 3.4, better in 89 of 148.
+// Unconditioned runs initialize directly from CUK0 (the cohort distribution
+// with the audiogram integrated out). Conditioning on the measured audiogram
+// replaces each measured band with CUK's narrower threshold-regressed prior.
 void qcls_audiogram_prior(float* thr, int units_are_hl) {
     if (!qcls_par_ready) init_bayesian_state();
 

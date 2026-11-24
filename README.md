@@ -144,7 +144,8 @@ Optional. Left blank, the procedure behaves exactly as it did before.
 
 - **Nine threshold fields**, 250 Hz to 6 kHz. Leave any frequency blank if it
   was not measured; blanks fall back to that band's population distribution
-  rather than to a guess. An entirely empty form uses the stock prior.
+  (`CUK0`, with the audiogram integrated out over the cohort) rather than to a
+  guess. An entirely empty form uses `CUK0` across all nine bands.
 - **Units**: dB HL or dB SPL. **This is not a formality.** The prior was fitted
   against thresholds in dB SPL, so dB HL must have the RETSPL added.
 - **Transducer**: selects which RETSPL table performs that conversion. On the
@@ -197,11 +198,9 @@ listeners replaying recorded responses.
    & guide** contains participant instructions and the operator guide. Close the
    menu with **Close**, Escape, or a tap outside the sheet.
 6. **Export:** On completion, two downloads are offered.
-   - **Download trials (TBT)** is the raw input: phase, trial, frequency,
-     level, response.
-   - **Download contours (ELC)** is the result: 90 rows of band, frequency, CU,
-     and fitted level. It does not currently include uncertainty estimates.
-   Filenames are `qCLS_TBT_[ID]_[Ear]_[YYYYMMDD].csv` and `qCLS_ELC_...`.
+   - **Download trials (TBT)** is the raw input: `Phase,Trial,Freq,Level,Response,Stim_Type,Bandwidth,Tracking_Mode,Ceiling_dB_SPL`.
+   - **Download contours (ELC)** is the result: 90 rows of `Band,Freq_Hz,CU,Level_dB_SPL,Stim_Type,Bandwidth,Tracking_Mode,Ceiling_dB_SPL` (directly importable by `qPRO` and `qLDM`).
+   Filenames are `qCLS_TBT_[ID]_[Ear]_[YYYYMMDD]_[HHMM].csv` and `qCLS_ELC_[ID]_[Ear]_[YYYYMMDD]_[HHMM].csv`.
 
 The navy, cream, and gold styling follows the lab's
 [Hearing Screener](https://github.com/AHSLab-UW/UWAHSLAB_Hearing_Screener).
@@ -213,9 +212,9 @@ No third-party image or font requests are needed during a participant session.
 ## 9. Session Storage
 Completed sessions are kept in the browser's `localStorage`, most recent first,
 capped at 50. Selecting one from **Menu > Previous sessions** restores its contours,
-audiogram, trials and displayed growth metric. The saved mode label currently
-distinguishes Bayesian from non-Bayesian sessions; isoPhon sessions are labeled
-as Random when restored.
+audiogram, trials, displayed growth metric, stimulus type, bandwidth, tracking
+mode (`Random`, `Bayesian`, `isoPhon`, or `Laplace_GP`), ceiling, and original
+session timestamp for CSV export.
 
 This is per browser and per machine, not a record system. It protects against a
 lost reload, not a lost laptop. The CSV downloads remain the way results leave

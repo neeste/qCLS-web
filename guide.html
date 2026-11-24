@@ -140,15 +140,19 @@ frequency.</p>
 </table>
 
 <h2>6. Saving the results</h2>
-<p>Two downloads appear when the test completes.</p>
+<p>Two downloads appear when the test completes, named
+<code>qCLS_TBT_[ID]_[Ear]_[YYYYMMDD]_[HHMM].csv</code> and
+<code>qCLS_ELC_[ID]_[Ear]_[YYYYMMDD]_[HHMM].csv</code> so back-to-back runs on
+the same ear do not overwrite one another.</p>
 <table>
   <tr><th>Download trials (TBT)</th><td>The raw record: phase, trial, frequency,
-      level, response.</td></tr>
-  <tr><th>Download contours (ELC)</th><td>The result: band, frequency, CU, level
-      and SD, 90 rows.</td></tr>
+      level, response, stimulus type, bandwidth, tracking mode, and ceiling.</td></tr>
+  <tr><th>Download contours (ELC)</th><td>The result: 90 rows of band, frequency,
+      CU, fitted level (dB SPL), stimulus type, bandwidth, tracking mode, and
+      ceiling (compatible with <code>qPRO</code> and <code>qLDM</code>).</td></tr>
 </table>
-<p>Completed sessions also appear under <em>Previous Sessions</em> and can be
-reloaded.</p>
+<p>Completed sessions (including stimulus type, bandwidth, tracking mode, and
+ceiling) also appear under <em>Previous Sessions</em> and can be reloaded.</p>
 <div class="warn"><strong>Session storage is not a record system.</strong> It
 lives in this browser on this machine, holds the 50 most recent sessions, and is
 lost if the browser data is cleared. Download the CSV files for anything you
