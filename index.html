@@ -58,8 +58,17 @@
         #prog-text { font-size: 12px; margin-bottom: 2px; }
         progress { width: 100%; height: 8px; accent-color: var(--gold); }
         button#run-btn { background: #28a745; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        button#stop-btn { background: #d97706; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-weight: bold; }
+        button#stop-btn:hover { background: #b45309; }
         button#cal-btn { background: #394c7d; color: white; border: none; padding: 10px; border-radius: 5px; width: 100%; cursor: pointer; transition: background 0.2s; font-weight: bold; }
         button#run-btn:disabled, button#cal-btn:disabled { background-color: #888888 !important; color: #d0d0d0 !important; cursor: not-allowed; }
+        #pause-modal { width: min(440px, calc(100% - 24px)); padding: 22px; border-radius: 12px; border: 1px solid #d1d5db; }
+        #pause-modal h3 { margin: 0 0 10px 0; color: #24304a; text-align: center; }
+        #pause-status { margin: 0 0 16px 0; color: #444; font-size: 0.94em; line-height: 1.45; text-align: center; }
+        .pause-stack { display: flex; flex-direction: column; gap: 8px; }
+        .pause-stack button { width: 100%; padding: 10px 14px; border-radius: 6px; font-weight: bold; font-size: 0.95em; cursor: pointer; }
+        .pause-primary { background: var(--blue); color: white; border: none; }
+        .pause-secondary { background: #f3f4f6; color: #24304a; border: 1px solid #cbd5e1; }
         #map-title { display: none; text-align: center; font-size: clamp(18px, 4vw, 24px); margin: 12px 0; }
         #heatmap { border: 1px solid #ddd; border-radius: 8px; width: min(100%, 500px); height: auto; flex-shrink: 0; display: none; background: white; }
         #metrics-container { display: none; width: min(100%, 500px); margin-top: 10px; }
@@ -77,7 +86,7 @@
             .hospital-brand img { width: 90px; height: 26px; }
             #bottom-bar { padding-top: 3px; }
             #menu-btn { padding: 5px 16px; }
-            button#run-btn { padding: 5px 12px; }
+            button#run-btn, button#stop-btn { padding: 5px 12px; }
             #scale-container { --scale-gap: 2px; min-height: 0; padding: 2px 0 4px; }
             .category-btn { min-height: 16px; line-height: 1.15; }
         }
@@ -97,6 +106,16 @@
             <li>There are no right or wrong answers. What matters is how you perceived the sound.</li>
         </ul>
         <button id="modal-close-btn" onclick="hideInstructions()" autofocus>OK</button>
+    </div>
+</dialog>
+
+<dialog id="pause-modal" aria-labelledby="pause-title">
+    <h3 id="pause-title">Test Paused</h3>
+    <p id="pause-status">Audio playback is paused. All settings and audiogram entries are preserved.</p>
+    <div class="pause-stack">
+        <button id="pause-resume-btn" type="button" class="pause-primary" onclick="resumePausedTest()" autofocus>Resume Test (Replay Current Trial)</button>
+        <button type="button" class="pause-secondary" onclick="restartTestKeepSettings()">Restart Test from Trial 1 (Keep Settings)</button>
+        <button type="button" class="pause-secondary" onclick="stopTestToMenuKeepSettings()">Stop &amp; Open Menu (Keep Settings)</button>
     </div>
 </dialog>
 
@@ -279,6 +298,7 @@
     <footer id="bottom-bar">
         <h1><strong>qCLS</strong><span> Loudness scaling</span></h1>
         <div class="bottom-actions">
+            <button id="stop-btn" type="button" onclick="pauseTest()" hidden>Pause / Stop</button>
             <button id="run-btn" aria-haspopup="dialog" aria-controls="modal-overlay" onclick="requestTest()" disabled>Run Test</button>
             <button id="menu-btn" aria-haspopup="dialog" aria-controls="control-menu" aria-expanded="false" onclick="openMenu()">Menu</button>
         </div>
@@ -321,6 +341,10 @@
     let calibration = null;
     let calibrationStarting = false;
     let testPending = false;
+    let isTesting = false;
+    let isPaused = false;
+    let stimTimerId = null;
+    let activeStimSrc = null;
 
     let session = {
         p1Trials: 0, p2Trials: 0, 
@@ -595,7 +619,73 @@
         return measured;
     }
 
+    function clearStimTimerAndAudio() {
+        if (stimTimerId !== null) {
+            clearTimeout(stimTimerId);
+            stimTimerId = null;
+        }
+        if (activeStimSrc) {
+            try {
+                activeStimSrc.onended = null;
+                activeStimSrc.stop();
+                activeStimSrc.disconnect();
+            } catch (e) {}
+            activeStimSrc = null;
+        }
+        setSoundPlaying(false);
+        document.querySelectorAll('.category-btn').forEach(b => b.disabled = true);
+    }
+
+    function pauseTest() {
+        if (!isTesting) return;
+        isPaused = true;
+        clearStimTimerAndAudio();
+        const trNum = session.history.length + 1;
+        const phaseLbl = session.phase === 'P1' ? 'Initial Phase' : 'Adaptive Phase';
+        document.getElementById('pause-status').innerHTML =
+            `<strong>${phaseLbl} &mdash; Trial ${trNum} of ${session.totalTrials}</strong><br>` +
+            `Playback is stopped. All participant, stimulus, ceiling, and audiogram settings are preserved.`;
+        document.getElementById('pause-resume-btn').innerText = `Resume Test (Replay Trial ${trNum})`;
+        document.getElementById('status').innerText = "Status: Paused";
+        document.getElementById('pause-modal').showModal();
+        document.getElementById('pause-resume-btn').focus();
+    }
+
+    function resumePausedTest() {
+        const pm = document.getElementById('pause-modal');
+        if (pm.open) pm.close();
+        if (!isTesting) return;
+        isPaused = false;
+        document.getElementById('status').innerText = "Status: Testing (resumed)...";
+        stimTimerId = setTimeout(playStimulus, 500);
+    }
+
+    function restartTestKeepSettings() {
+        const pm = document.getElementById('pause-modal');
+        if (pm.open) pm.close();
+        clearStimTimerAndAudio();
+        isTesting = false;
+        isPaused = false;
+        document.getElementById('stop-btn').hidden = true;
+        setTestControlsDisabled(false);
+        requestTest();
+    }
+
+    function stopTestToMenuKeepSettings() {
+        const pm = document.getElementById('pause-modal');
+        if (pm.open) pm.close();
+        clearStimTimerAndAudio();
+        isTesting = false;
+        isPaused = false;
+        document.getElementById('stop-btn').hidden = true;
+        document.getElementById('progress-container').style.display = 'none';
+        setTestControlsDisabled(false);
+        document.getElementById('status').innerText = "Status: Stopped (all settings preserved)";
+        openMenu();
+    }
+
     async function startTest() {
+        clearStimTimerAndAudio();
         setTestControlsDisabled(true);
         await initAudio();
         stopCalibration();
@@ -626,6 +716,10 @@
         session.report = null;
         session.nThresholds = applyAudiogramPrior();
 
+        isTesting = true;
+        isPaused = false;
+        document.getElementById('stop-btn').hidden = false;
+
         document.getElementById('progress-container').style.display = 'flex';
         document.getElementById('test-progress').max = session.totalTrials;
         document.getElementById('test-progress').value = 0;
@@ -637,10 +731,12 @@
                   document.getElementById('audio-units').value.toUpperCase() + ")"
                 : "  (stock prior, no audiogram)");
         
-        setTimeout(playStimulus, 1000);
+        stimTimerId = setTimeout(playStimulus, 1000);
     }
 
     function playStimulus() {
+        stimTimerId = null;
+        if (!isTesting || isPaused) return;
         const duration = 1.0;
         const numSamples = duration * FS;
         const buf = audioCtx.createBuffer(1, numSamples, FS);
@@ -690,8 +786,11 @@
 
         src.connect(panner);
         panner.connect(audioCtx.destination);
+        activeStimSrc = src;
 
         src.onended = () => {
+            if (activeStimSrc !== src || !isTesting || isPaused) return;
+            activeStimSrc = null;
             setSoundPlaying(false);
             document.querySelectorAll('.category-btn').forEach(b => b.disabled = false);
         };
@@ -700,6 +799,7 @@
     }
 
     function handleResponse(val) {
+        if (!isTesting || isPaused) return;
         document.querySelectorAll('.category-btn').forEach(b => b.disabled = true);
         session.history.push({ f: session.curF, l: session.curL, r: val, p: session.phase });
 
@@ -728,7 +828,7 @@
             progText.innerText = `Trial ${session.history.length + 1} of ${session.totalTrials}`;
         }
 
-        setTimeout(playStimulus, 500);
+        stimTimerId = setTimeout(playStimulus, 500);
     }
 
     function updateAdaptiveLogic(val) {
@@ -860,6 +960,10 @@
     }
 
     function finishTest() {
+        clearStimTimerAndAudio();
+        isTesting = false;
+        isPaused = false;
+        document.getElementById('stop-btn').hidden = true;
         document.getElementById('scale-container').style.display = 'none';
         document.getElementById('progress-container').style.display = 'none';
         
